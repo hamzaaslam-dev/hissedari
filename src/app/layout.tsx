@@ -5,8 +5,8 @@ import { Footer } from "@/components/Footer";
 import { WalletProviderWrapper } from "@/components/WalletProvider";
 
 export const metadata: Metadata = {
-  title: "SolEstate | Tokenized Real Estate on Solana",
-  description: "Invest in premium real estate through fractional ownership powered by Solana blockchain. Own a piece of the world's finest properties.",
+  title: "Hissedari | Tokenized Real Estate on Solana",
+  description: "Invest in premium Pakistani real estate through fractional ownership powered by Solana blockchain. Own a piece of Pakistan's finest properties.",
 };
 
 export default function RootLayout({

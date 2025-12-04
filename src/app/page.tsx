@@ -306,7 +306,7 @@ export default function Home() {
           >
             <span className="text-accent text-sm font-semibold uppercase tracking-wider">Benefits</span>
             <h2 className="text-4xl md:text-5xl font-bold mt-2 mb-4" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-              Why Choose SolEstate
+              Why Choose Hissedari
             </h2>
             <p className="text-foreground-muted max-w-2xl mx-auto">
               Experience the future of real estate investment with blockchain technology.

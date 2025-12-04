@@ -34,7 +34,7 @@ export const Navbar = () => {
                 <Building2 className="w-6 h-6 text-background" />
               </div>
               <span className="text-xl font-semibold tracking-tight">
-                Sol<span className="text-gradient-gold">Estate</span>
+                Hisse<span className="text-gradient-gold">dari</span>
               </span>
             </Link>
 

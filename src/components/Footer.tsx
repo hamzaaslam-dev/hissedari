@@ -38,7 +38,7 @@ export const Footer = () => {
                 <Building2 className="w-6 h-6 text-background" />
               </div>
               <span className="text-xl font-semibold tracking-tight">
-                Sol<span className="text-gradient-gold">Estate</span>
+                Hisse<span className="text-gradient-gold">dari</span>
               </span>
             </Link>
             <p className="text-foreground-muted mb-6 max-w-sm">
@@ -128,7 +128,7 @@ export const Footer = () => {
         {/* Bottom Bar */}
         <div className="mt-16 pt-8 border-t border-glass-border flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="text-sm text-foreground-muted">
-            © {new Date().getFullYear()} SolEstate. All rights reserved.
+            © {new Date().getFullYear()} Hissedari. All rights reserved.
           </p>
           <div className="flex items-center space-x-2 text-sm text-foreground-muted">
             <span>Powered by</span>
