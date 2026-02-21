@@ -19,7 +19,12 @@ interface Props {
 }
 
 export const WalletProviderWrapper: FC<Props> = ({ children }) => {
-  const endpoint = useMemo(() => clusterApiUrl("devnet"), []);
+  const endpoint = useMemo(() => {
+    const network = process.env.NEXT_PUBLIC_SOLANA_NETWORK || "localhost";
+    return network === "localhost" 
+      ? "http://localhost:8899" 
+      : clusterApiUrl(network as "devnet" | "mainnet-beta");
+  }, []);
 
   const wallets = useMemo(
     () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],

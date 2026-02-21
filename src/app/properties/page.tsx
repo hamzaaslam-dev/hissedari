@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Search, SlidersHorizontal, X, MapPin, Building2, TrendingUp } from "lucide-react";
 import { PropertyCard } from "@/components/PropertyCard";
-import { properties, Property } from "@/data/properties";
+import { properties as defaultProperties, Property } from "@/data/properties";
+import { getRegisteredProperties, RegisteredProperty } from "@/lib/propertyStore";
 
 type PropertyType = Property["propertyType"] | "all";
 type PropertyStatus = Property["status"] | "all";
@@ -16,9 +17,20 @@ export default function PropertiesPage() {
   const [status, setStatus] = useState<PropertyStatus>("all");
   const [sortBy, setSortBy] = useState<SortOption>("newest");
   const [showFilters, setShowFilters] = useState(false);
+  const [userProperties, setUserProperties] = useState<RegisteredProperty[]>([]);
+
+  // Load user-registered properties from localStorage
+  useEffect(() => {
+    setUserProperties(getRegisteredProperties());
+  }, []);
+
+  // Combine default and user properties
+  const allProperties: Property[] = useMemo(() => {
+    return [...userProperties, ...defaultProperties];
+  }, [userProperties]);
 
   const filteredProperties = useMemo(() => {
-    let result = [...properties];
+    let result = [...allProperties];
 
     // Search filter
     if (searchQuery) {
@@ -59,7 +71,7 @@ export default function PropertiesPage() {
     }
 
     return result;
-  }, [searchQuery, propertyType, status, sortBy]);
+  }, [searchQuery, propertyType, status, sortBy, allProperties]);
 
   const clearFilters = () => {
     setSearchQuery("");
@@ -292,7 +304,7 @@ export default function PropertiesPage() {
                 <Building2 className="w-4 h-4" />
                 <span className="text-sm">Total Properties</span>
               </div>
-              <p className="text-2xl font-bold text-gradient-gold">{properties.length}</p>
+              <p className="text-2xl font-bold text-gradient-gold">{allProperties.length}</p>
             </div>
             <div className="text-center">
               <div className="flex items-center justify-center gap-2 text-foreground-muted mb-2">
@@ -300,7 +312,7 @@ export default function PropertiesPage() {
                 <span className="text-sm">Cities</span>
               </div>
               <p className="text-2xl font-bold text-gradient-gold">
-                {new Set(properties.map((p) => p.city)).size}
+                {new Set(allProperties.map((p) => p.city)).size}
               </p>
             </div>
             <div className="text-center">
@@ -309,7 +321,7 @@ export default function PropertiesPage() {
                 <span className="text-sm">Avg. Yield</span>
               </div>
               <p className="text-2xl font-bold text-secondary">
-                {(properties.reduce((acc, p) => acc + p.annualYield, 0) / properties.length).toFixed(1)}%
+                {allProperties.length > 0 ? (allProperties.reduce((acc, p) => acc + p.annualYield, 0) / allProperties.length).toFixed(1) : 0}%
               </p>
             </div>
             <div className="text-center">
@@ -318,7 +330,7 @@ export default function PropertiesPage() {
                 <span className="text-sm">Total Value</span>
               </div>
               <p className="text-2xl font-bold text-gradient-gold">
-                PKR {(properties.reduce((acc, p) => acc + p.priceInPKR, 0) / 1000000000).toFixed(2)}B
+                PKR {(allProperties.reduce((acc, p) => acc + p.priceInPKR, 0) / 1000000000).toFixed(2)}B
               </p>
             </div>
           </div>

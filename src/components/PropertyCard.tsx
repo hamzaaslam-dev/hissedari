@@ -14,17 +14,23 @@ interface PropertyCardProps {
 export const PropertyCard = ({ property, index = 0 }: PropertyCardProps) => {
   const fundingProgress = ((property.totalTokens - property.availableTokens) / property.totalTokens) * 100;
 
-  const statusColors = {
+  const statusColors: Record<string, string> = {
     funding: "bg-accent/20 text-accent",
     funded: "bg-blue-500/20 text-blue-400",
     active: "bg-secondary/20 text-secondary",
+    cancelled: "bg-red-500/20 text-red-400",
   };
 
-  const statusLabels = {
+  const statusLabels: Record<string, string> = {
     funding: "Funding",
     funded: "Fully Funded",
     active: "Active",
+    cancelled: "Cancelled",
   };
+
+  const campaignStatus = (property as { campaignStatus?: string }).campaignStatus;
+  const displayStatus = campaignStatus === "cancelled" ? "cancelled" : property.status;
+  const platformEquityPercent = (property as { platformEquityPercent?: number }).platformEquityPercent;
 
   const propertyTypeIcons = {
     residential: "🏠",
@@ -54,10 +60,15 @@ export const PropertyCard = ({ property, index = 0 }: PropertyCardProps) => {
             <div className="property-image-overlay absolute inset-0" />
             
             {/* Status Badge */}
-            <div className="absolute top-4 left-4">
-              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColors[property.status]}`}>
-                {statusLabels[property.status]}
+            <div className="absolute top-4 left-4 flex flex-col gap-1">
+              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColors[displayStatus] || statusColors.funding}`}>
+                {statusLabels[displayStatus] || statusLabels.funding}
               </span>
+              {platformEquityPercent && platformEquityPercent > 0 && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/20 text-amber-400">
+                  {platformEquityPercent}% Platform
+                </span>
+              )}
             </div>
             
             {/* Property Type */}
@@ -116,7 +127,7 @@ export const PropertyCard = ({ property, index = 0 }: PropertyCardProps) => {
             </div>
 
             {/* Progress Bar */}
-            {property.status === "funding" && (
+            {property.status === "funding" && displayStatus !== "cancelled" && (
               <div className="mb-4">
                 <div className="flex items-center justify-between text-sm mb-2">
                   <span className="text-foreground-muted">Funding Progress</span>
@@ -130,6 +141,15 @@ export const PropertyCard = ({ property, index = 0 }: PropertyCardProps) => {
                     className="h-full bg-gradient-to-r from-accent to-accent-light rounded-full"
                   />
                 </div>
+              </div>
+            )}
+
+            {/* Cancelled Notice */}
+            {displayStatus === "cancelled" && (
+              <div className="mb-4 p-2 rounded-lg bg-red-500/10 text-center">
+                <span className="text-red-400 text-sm font-medium">
+                  Refunds Available
+                </span>
               </div>
             )}
 

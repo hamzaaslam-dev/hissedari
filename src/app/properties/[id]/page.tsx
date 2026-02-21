@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, use } from "react";
+import { useState, use, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -20,30 +20,65 @@ import {
   Users,
   Shield,
   FileText,
-  ChevronRight,
   Plus,
   Minus,
   Wallet,
   CheckCircle2,
   Clock,
   ExternalLink,
+  Loader2,
+  Droplets,
 } from "lucide-react";
-import { getPropertyById } from "@/data/properties";
+import { getPropertyById, Property } from "@/data/properties";
+import { getRegisteredPropertyById, RegisteredProperty } from "@/lib/propertyStore";
+import { getSolBalance, getExplorerUrl, SOLANA_NETWORK, connection } from "@/lib/solana";
+import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
 interface PropertyPageProps {
   params: Promise<{ id: string }>;
 }
 
+// SOL price in USD (approximate - in production you'd fetch this from an API)
+const SOL_PRICE_USD = 150;
+
 export default function PropertyDetailPage({ params }: PropertyPageProps) {
   const { id } = use(params);
-  const property = getPropertyById(id);
   const router = useRouter();
-  const { connected } = useWallet();
+  const { connected, publicKey, signTransaction } = useWallet();
   const { setVisible } = useWalletModal();
   
   const [selectedImage, setSelectedImage] = useState(0);
   const [tokenAmount, setTokenAmount] = useState(1);
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+  const [solBalance, setSolBalance] = useState<number>(0);
+  const [isPurchasing, setIsPurchasing] = useState(false);
+  const [purchaseSuccess, setPurchaseSuccess] = useState(false);
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [txSignature, setTxSignature] = useState<string | null>(null);
+
+  // Try to get property from both sources
+  const defaultProperty = getPropertyById(id);
+  const registeredProperty = getRegisteredPropertyById(id);
+  const property: (Property & { mintAddress?: string; ownerAddress?: string }) | undefined = 
+    registeredProperty || defaultProperty;
+  
+  // Check if this is a user-registered property (has blockchain data)
+  const isBlockchainProperty = !!(registeredProperty?.mintAddress);
+
+  // Fetch SOL balance
+  useEffect(() => {
+    async function fetchBalance() {
+      if (publicKey) {
+        try {
+          const balance = await getSolBalance(publicKey);
+          setSolBalance(balance);
+        } catch (e) {
+          console.error("Error fetching balance:", e);
+        }
+      }
+    }
+    fetchBalance();
+  }, [publicKey]);
 
   if (!property) {
     return (
@@ -59,9 +94,70 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
   }
 
   const fundingProgress = ((property.totalTokens - property.availableTokens) / property.totalTokens) * 100;
-  const totalInvestment = tokenAmount * property.tokenPrice;
-  const estimatedYearlyReturn = (totalInvestment * property.annualYield) / 100;
+  const totalInvestmentUSD = tokenAmount * property.tokenPrice;
+  const totalInvestmentSOL = totalInvestmentUSD / SOL_PRICE_USD;
+  const estimatedYearlyReturn = (totalInvestmentUSD * property.annualYield) / 100;
   const ownershipPercentage = (tokenAmount / property.totalTokens) * 100;
+
+  // Handle purchase with SOL
+  const handlePurchaseWithSOL = async () => {
+    if (!publicKey || !signTransaction || !property) return;
+    
+    setIsPurchasing(true);
+    setPurchaseError(null);
+    
+    try {
+      // Get the owner's public key (for user-registered properties)
+      // For demo properties, we'll use a demo wallet address
+      const ownerAddress = (property as RegisteredProperty).ownerAddress || 
+        "DemoWa11etAddressForTestingPurposesOnly1111111";
+      
+      let ownerPubkey: PublicKey;
+      try {
+        ownerPubkey = new PublicKey(ownerAddress);
+      } catch {
+        // If invalid address, use a demo address
+        ownerPubkey = publicKey; // Send to self for demo
+      }
+
+      // Create transaction to send SOL
+      const lamports = Math.floor(totalInvestmentSOL * LAMPORTS_PER_SOL);
+      
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: ownerPubkey,
+          lamports,
+        })
+      );
+
+      // Get recent blockhash
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = publicKey;
+
+      // Sign transaction
+      const signedTx = await signTransaction(transaction);
+      
+      // Send transaction
+      const signature = await connection.sendRawTransaction(signedTx.serialize());
+      await connection.confirmTransaction(signature, "confirmed");
+      
+      setTxSignature(signature);
+      setPurchaseSuccess(true);
+      
+      // Update SOL balance
+      const newBalance = await getSolBalance(publicKey);
+      setSolBalance(newBalance);
+      
+    } catch (e: unknown) {
+      console.error("Purchase error:", e);
+      const errorMessage = e instanceof Error ? e.message : "Transaction failed";
+      setPurchaseError(errorMessage);
+    }
+    
+    setIsPurchasing(false);
+  };
 
   const statusColors = {
     funding: "bg-accent/20 text-accent",
@@ -364,7 +460,7 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
               )}
 
               {/* Token Price */}
-              <div className="p-4 rounded-lg bg-background-secondary mb-6">
+              <div className="p-4 rounded-lg bg-background-secondary mb-4">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-foreground-muted">Token Price</span>
                   <span className="text-2xl font-bold text-accent">${property.tokenPrice}</span>
@@ -373,6 +469,51 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
                   Each token represents {(100 / property.totalTokens).toFixed(4)}% ownership
                 </p>
               </div>
+
+              {/* Platform Equity Notice */}
+              {(registeredProperty?.platformEquityPercent ?? 0) > 0 && (
+                <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 mb-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-amber-400 text-sm font-medium">📊 Token Distribution</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-foreground-muted text-xs">Platform Equity</p>
+                      <p className="font-semibold text-amber-400">
+                        {registeredProperty?.platformEquityPercent}%
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-foreground-muted text-xs">Available for Investors</p>
+                      <p className="font-semibold text-secondary">
+                        {100 - (registeredProperty?.platformEquityPercent ?? 0)}%
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-foreground-muted mt-2">
+                    Platform retains {registeredProperty?.platformEquityPercent}% equity without investment
+                  </p>
+                </div>
+              )}
+
+              {/* Funding Deadline */}
+              {registeredProperty?.fundingDeadline && property.status === "funding" && (
+                <div className="p-4 rounded-lg bg-purple-500/10 border border-purple-500/20 mb-6">
+                  <div className="flex items-center justify-between">
+                    <span className="text-foreground-muted text-sm">Funding Deadline</span>
+                    <span className="font-medium text-purple-400">
+                      {new Date(registeredProperty.fundingDeadline).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </span>
+                  </div>
+                  <p className="text-xs text-foreground-muted mt-1">
+                    Full refund available if goal not met by deadline
+                  </p>
+                </div>
+              )}
 
               {/* Token Amount Selector */}
               {property.status === "funding" && (
@@ -423,8 +564,12 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
                   {/* Investment Summary */}
                   <div className="space-y-3 mb-6 p-4 rounded-lg bg-background-secondary">
                     <div className="flex items-center justify-between">
-                      <span className="text-foreground-muted">Total Investment</span>
-                      <span className="font-bold text-lg">${totalInvestment.toLocaleString()}</span>
+                      <span className="text-foreground-muted">Total (USD)</span>
+                      <span className="font-bold">${totalInvestmentUSD.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-foreground-muted">Total (SOL)</span>
+                      <span className="font-bold text-lg text-accent">{totalInvestmentSOL.toFixed(4)} SOL</span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-foreground-muted">Ownership</span>
@@ -466,15 +611,93 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
                 </div>
               )}
 
+              {/* Cancel Button - Only for property owner */}
+              {connected && 
+               registeredProperty?.ownerAddress === publicKey?.toBase58() && 
+               registeredProperty?.campaignStatus === "active" && (
+                <div className="mt-6 p-4 rounded-lg bg-red-500/10 border border-red-500/20">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-xl">⚠️</span>
+                    <span className="font-medium text-red-300">Property Owner Controls</span>
+                  </div>
+                  <p className="text-sm text-foreground-muted mb-3">
+                    As the property owner, you can cancel the funding campaign. 
+                    All investors will be able to claim full refunds.
+                  </p>
+                  <button
+                    onClick={() => {
+                      if (confirm("Are you sure you want to cancel this campaign? All investors will be able to claim refunds.")) {
+                        alert("Cancel functionality would execute Solana transaction here");
+                      }
+                    }}
+                    className="w-full px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors"
+                  >
+                    Cancel Funding Campaign
+                  </button>
+                </div>
+              )}
+
+              {/* Cancelled Campaign - Refund Available */}
+              {registeredProperty?.campaignStatus === "cancelled" && (
+                <div className="mt-6 p-4 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-xl">💰</span>
+                    <span className="font-medium text-amber-300">Campaign Cancelled</span>
+                  </div>
+                  <p className="text-sm text-foreground-muted mb-3">
+                    This campaign has been cancelled. If you invested, you can claim a full refund.
+                  </p>
+                  {connected && (
+                    <button
+                      onClick={() => {
+                        alert("Claim refund functionality would execute Solana transaction here");
+                      }}
+                      className="w-full px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors"
+                    >
+                      Claim Refund
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Get Devnet SOL */}
+              {connected && solBalance < 1 && (
+                <div className="mt-6 p-4 rounded-lg bg-purple-500/10 border border-purple-500/20">
+                  <div className="flex items-center gap-3 mb-2">
+                    <Droplets className="w-5 h-5 text-purple-400" />
+                    <span className="font-medium text-purple-300">Need Test SOL?</span>
+                  </div>
+                  <p className="text-sm text-foreground-muted mb-3">
+                    Get free Devnet SOL from the Solana Faucet to make purchases.
+                  </p>
+                  <a
+                    href="https://faucet.solana.com/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium transition-colors"
+                  >
+                    <Droplets className="w-4 h-4" />
+                    Get Devnet SOL
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
+
               {/* Trust Badges */}
               <div className="mt-6 pt-6 border-t border-glass-border">
                 <div className="flex items-center gap-2 text-sm text-foreground-muted mb-3">
                   <Shield className="w-4 h-4 text-secondary" />
                   <span>Secure blockchain transaction</span>
                 </div>
-                <div className="flex items-center gap-2 text-sm text-foreground-muted">
+                <div className="flex items-center gap-2 text-sm text-foreground-muted mb-3">
                   <Clock className="w-4 h-4 text-accent" />
                   <span>Instant token delivery</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-cyan-400">
+                  <span className="text-xs px-2 py-0.5 rounded bg-cyan-500/20 border border-cyan-500/30">
+                    {SOLANA_NETWORK}
+                  </span>
+                  <span className="text-foreground-muted">Test network (no real money)</span>
                 </div>
               </div>
             </motion.div>
@@ -490,7 +713,7 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-            onClick={() => setShowPurchaseModal(false)}
+            onClick={() => !isPurchasing && setShowPurchaseModal(false)}
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
@@ -499,49 +722,155 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
               className="glass-card p-8 max-w-md w-full"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="text-center">
-                <div className="w-16 h-16 rounded-full bg-accent/10 flex items-center justify-center mx-auto mb-4">
-                  <Coins className="w-8 h-8 text-accent" />
-                </div>
-                <h3 className="text-2xl font-bold mb-2">Confirm Purchase</h3>
-                <p className="text-foreground-muted mb-6">
-                  You are about to purchase {tokenAmount} tokens of {property.name}
-                </p>
+              {!purchaseSuccess ? (
+                <div className="text-center">
+                  <div className="w-16 h-16 rounded-full bg-accent/10 flex items-center justify-center mx-auto mb-4">
+                    <Coins className="w-8 h-8 text-accent" />
+                  </div>
+                  <h3 className="text-2xl font-bold mb-2">Buy Property Tokens</h3>
+                  <p className="text-foreground-muted mb-6">
+                    Purchase {tokenAmount} tokens of {property.name} with Devnet SOL
+                  </p>
 
-                <div className="space-y-3 p-4 rounded-lg bg-background-secondary mb-6 text-left">
-                  <div className="flex items-center justify-between">
-                    <span className="text-foreground-muted">Tokens</span>
-                    <span className="font-medium">{tokenAmount}</span>
+                  {/* Wallet Balance */}
+                  <div className="p-4 rounded-lg bg-purple-500/10 border border-purple-500/20 mb-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-foreground-muted">Your Balance</span>
+                      <span className="font-bold text-purple-400">{solBalance.toFixed(4)} SOL</span>
+                    </div>
+                    {solBalance < totalInvestmentSOL && (
+                      <div className="mt-2 text-sm text-amber-400">
+                        ⚠️ Insufficient balance. 
+                        <a 
+                          href="https://faucet.solana.com/" 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="underline ml-1"
+                        >
+                          Get Devnet SOL →
+                        </a>
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-foreground-muted">Price per Token</span>
-                    <span className="font-medium">${property.tokenPrice}</span>
-                  </div>
-                  <div className="border-t border-glass-border pt-3 flex items-center justify-between">
-                    <span className="font-semibold">Total</span>
-                    <span className="text-xl font-bold text-accent">${totalInvestment.toLocaleString()}</span>
-                  </div>
-                </div>
 
-                <div className="flex gap-4">
-                  <button
-                    onClick={() => setShowPurchaseModal(false)}
-                    className="btn-secondary flex-1"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => {
-                      // Simulate purchase
-                      alert("Purchase functionality would connect to Solana blockchain here!");
-                      setShowPurchaseModal(false);
-                    }}
-                    className="btn-primary flex-1"
-                  >
-                    Confirm
-                  </button>
+                  <div className="space-y-3 p-4 rounded-lg bg-background-secondary mb-6 text-left">
+                    <div className="flex items-center justify-between">
+                      <span className="text-foreground-muted">Tokens</span>
+                      <span className="font-medium">{tokenAmount}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-foreground-muted">Price per Token</span>
+                      <span className="font-medium">${property.tokenPrice}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-foreground-muted">Total (USD)</span>
+                      <span className="font-medium">${totalInvestmentUSD.toLocaleString()}</span>
+                    </div>
+                    <div className="border-t border-glass-border pt-3 flex items-center justify-between">
+                      <span className="font-semibold">Pay with SOL</span>
+                      <span className="text-xl font-bold text-accent">{totalInvestmentSOL.toFixed(4)} SOL</span>
+                    </div>
+                  </div>
+
+                  {purchaseError && (
+                    <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 mb-4 text-left">
+                      <p className="text-red-400 text-sm">{purchaseError}</p>
+                    </div>
+                  )}
+
+                  <div className="text-xs text-foreground-muted mb-4">
+                    Network: <span className="text-cyan-400">{SOLANA_NETWORK}</span> (Test tokens, no real money)
+                  </div>
+
+                  <div className="flex gap-4">
+                    <button
+                      onClick={() => {
+                        setShowPurchaseModal(false);
+                        setPurchaseError(null);
+                      }}
+                      disabled={isPurchasing}
+                      className="btn-secondary flex-1 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handlePurchaseWithSOL}
+                      disabled={isPurchasing || solBalance < totalInvestmentSOL}
+                      className="btn-primary flex-1 disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {isPurchasing ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Processing...
+                        </>
+                      ) : (
+                        <>
+                          <Coins className="w-4 h-4" />
+                          Pay {totalInvestmentSOL.toFixed(4)} SOL
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="text-center">
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={{ type: "spring", bounce: 0.5 }}
+                    className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-400 flex items-center justify-center mx-auto mb-6"
+                  >
+                    <CheckCircle2 className="w-10 h-10 text-white" />
+                  </motion.div>
+                  <h3 className="text-2xl font-bold mb-2">Purchase Complete!</h3>
+                  <p className="text-foreground-muted mb-6">
+                    You have successfully purchased {tokenAmount} tokens
+                  </p>
+
+                  <div className="space-y-3 p-4 rounded-lg bg-background-secondary mb-6 text-left">
+                    <div className="flex items-center justify-between">
+                      <span className="text-foreground-muted">Property</span>
+                      <span className="font-medium">{property.name}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-foreground-muted">Tokens Purchased</span>
+                      <span className="font-medium">{tokenAmount}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-foreground-muted">Amount Paid</span>
+                      <span className="font-bold text-accent">{totalInvestmentSOL.toFixed(4)} SOL</span>
+                    </div>
+                  </div>
+
+                  {txSignature && (
+                    <a
+                      href={getExplorerUrl(txSignature)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors mb-6"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      View Transaction on Solana Explorer
+                    </a>
+                  )}
+
+                  <div className="flex gap-4">
+                    <button
+                      onClick={() => {
+                        setShowPurchaseModal(false);
+                        setPurchaseSuccess(false);
+                        setTxSignature(null);
+                      }}
+                      className="btn-secondary flex-1"
+                    >
+                      Close
+                    </button>
+                    <Link href="/dashboard" className="btn-primary flex-1 text-center">
+                      View Dashboard
+                    </Link>
+                  </div>
+                </div>
+              )}
             </motion.div>
           </motion.div>
         )}
