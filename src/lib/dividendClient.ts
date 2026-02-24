@@ -11,7 +11,7 @@ import BN from "bn.js";
 
 // Program ID - Update this after deploying the contract
 export const DIVIDEND_PROGRAM_ID = new PublicKey(
-  "BEyV8219psLA9Rjdb3jFGrASszbzVvCDDtdUvF85HZup"
+  "78JohfdVhYCV6EPfC3baRkNoWUA5yDmw5HXkroeiSpCP"
 );
 
 // ============================================================================

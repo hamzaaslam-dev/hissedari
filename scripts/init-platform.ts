@@ -10,7 +10,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 const CROWDFUNDING_PROGRAM_ID = new PublicKey(
-  "4Z1kEyhP41YaKoKKaEKfA6JR2kvHewjCFJH7w5iYTY3v"
+  "2ghvWvTvMHdACLuGztbjERbvMPwwQcFTag6a6eU7RifY"
 );
 
 function getPlatformConfigPDA(): [PublicKey, number] {

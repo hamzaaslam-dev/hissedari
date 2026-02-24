@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("BEyV8219psLA9Rjdb3jFGrASszbzVvCDDtdUvF85HZup");
+declare_id!("78JohfdVhYCV6EPfC3baRkNoWUA5yDmw5HXkroeiSpCP");
 
 #[program]
 pub mod property_dividends {

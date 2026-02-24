@@ -5,15 +5,15 @@ anchor_version = "0.30.1"
 resolution = true
 skip-lint = false
 
-[programs.localnet]
-crowdfunding = "4Z1kEyhP41YaKoKKaEKfA6JR2kvHewjCFJH7w5iYTY3v"
-property_dividends = "BEyV8219psLA9Rjdb3jFGrASszbzVvCDDtdUvF85HZup"
+[programs.devnet]
+crowdfunding = "2ghvWvTvMHdACLuGztbjERbvMPwwQcFTag6a6eU7RifY"
+property_dividends = "78JohfdVhYCV6EPfC3baRkNoWUA5yDmw5HXkroeiSpCP"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
