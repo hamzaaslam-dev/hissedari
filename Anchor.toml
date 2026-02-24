@@ -8,6 +8,7 @@ skip-lint = false
 [programs.devnet]
 crowdfunding = "2ghvWvTvMHdACLuGztbjERbvMPwwQcFTag6a6eU7RifY"
 property_dividends = "78JohfdVhYCV6EPfC3baRkNoWUA5yDmw5HXkroeiSpCP"
+marketplace = "9wprAAKPfNu9MLzCWMh63F35fJZrmk49G45nsSpfmbEd"
 
 [registry]
 url = "https://api.apr.dev"
