@@ -206,9 +206,9 @@ export default function MarketplacePage() {
                 >
                   {/* Property Image */}
                   <div className="relative h-48 bg-gradient-to-br from-emerald-500/20 to-blue-500/20">
-                    {property?.imageUrl ? (
+                    {property?.image ? (
                       <img
-                        src={property.imageUrl}
+                        src={property.image}
                         alt={property.name}
                         className="w-full h-full object-cover"
                       />
