@@ -71,6 +71,26 @@ interface WalletAdapter {
   signTransaction: (tx: Transaction) => Promise<Transaction>;
 }
 
+// Helper to write u64 as little-endian buffer (browser compatible)
+function toLeU64(value: number | BN): Buffer {
+  const bn = new BN(value);
+  return bn.toArrayLike(Buffer, "le", 8);
+}
+
+// Helper to read u64 from little-endian buffer (browser compatible)
+function readLeU64(data: Buffer, offset: number): number {
+  const slice = data.slice(offset, offset + 8);
+  const bn = new BN(slice, "le");
+  return bn.toNumber();
+}
+
+// Helper to read i64 from little-endian buffer (browser compatible)
+function readLeI64(data: Buffer, offset: number): number {
+  const slice = data.slice(offset, offset + 8);
+  const bn = new BN(slice, "le");
+  return bn.toNumber();
+}
+
 // Instruction Builders
 export async function createListingInstruction(
   seller: PublicKey,
@@ -83,11 +103,8 @@ export async function createListingInstruction(
   const sellerTokenAccount = await getAssociatedTokenAddress(tokenMint, seller);
   const escrowTokenAccount = await getAssociatedTokenAddress(tokenMint, listing, true);
 
-  const amountBuffer = Buffer.alloc(8);
-  amountBuffer.writeBigUInt64LE(BigInt(amount));
-
-  const priceBuffer = Buffer.alloc(8);
-  priceBuffer.writeBigUInt64LE(BigInt(pricePerToken));
+  const amountBuffer = toLeU64(amount);
+  const priceBuffer = toLeU64(pricePerToken);
 
   const data = Buffer.concat([DISCRIMINATORS.createListing, amountBuffer, priceBuffer]);
 
@@ -122,8 +139,7 @@ export async function buyTokensInstruction(
   const escrowTokenAccount = await getAssociatedTokenAddress(tokenMint, listing, true);
   const buyerTokenAccount = await getAssociatedTokenAddress(tokenMint, buyer);
 
-  const amountBuffer = Buffer.alloc(8);
-  amountBuffer.writeBigUInt64LE(BigInt(amount));
+  const amountBuffer = toLeU64(amount);
 
   const data = Buffer.concat([DISCRIMINATORS.buyTokens, amountBuffer]);
 
@@ -179,8 +195,7 @@ export async function updateListingPriceInstruction(
 ): Promise<Transaction> {
   const [listing] = getListingPDA(seller, tokenMint);
 
-  const priceBuffer = Buffer.alloc(8);
-  priceBuffer.writeBigUInt64LE(BigInt(newPricePerToken));
+  const priceBuffer = toLeU64(newPricePerToken);
 
   const data = Buffer.concat([DISCRIMINATORS.updateListingPrice, priceBuffer]);
 
@@ -287,13 +302,13 @@ export async function fetchListing(
     const tokenMintPubkey = new PublicKey(data.slice(offset, offset + 32));
     offset += 32;
 
-    const amount = Number(data.readBigUInt64LE(offset));
+    const amount = readLeU64(data, offset);
     offset += 8;
 
-    const pricePerToken = Number(data.readBigUInt64LE(offset));
+    const pricePerToken = readLeU64(data, offset);
     offset += 8;
 
-    const createdAt = Number(data.readBigInt64LE(offset));
+    const createdAt = readLeI64(data, offset);
     offset += 8;
 
     const isActive = data[offset] === 1;
@@ -334,13 +349,13 @@ export async function fetchAllListings(): Promise<Listing[]> {
       const tokenMint = new PublicKey(data.slice(offset, offset + 32));
       offset += 32;
 
-      const amount = Number(data.readBigUInt64LE(offset));
+      const amount = readLeU64(data, offset);
       offset += 8;
 
-      const pricePerToken = Number(data.readBigUInt64LE(offset));
+      const pricePerToken = readLeU64(data, offset);
       offset += 8;
 
-      const createdAt = Number(data.readBigInt64LE(offset));
+      const createdAt = readLeI64(data, offset);
       offset += 8;
 
       const isActive = data[offset] === 1;
@@ -382,10 +397,10 @@ export async function fetchMarketplaceStats(): Promise<MarketplaceStats | null> 
     const feeBps = data.readUInt16LE(offset);
     offset += 2;
 
-    const totalVolume = Number(data.readBigUInt64LE(offset));
+    const totalVolume = readLeU64(data, offset);
     offset += 8;
 
-    const totalListings = Number(data.readBigUInt64LE(offset));
+    const totalListings = readLeU64(data, offset);
 
     return {
       authority,
