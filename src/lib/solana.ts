@@ -31,8 +31,8 @@ import {
   getDividendPoolPDA,
 } from "./dividendClient";
 
-// Use localhost for local testing, devnet for production
-export const SOLANA_NETWORK = process.env.NEXT_PUBLIC_SOLANA_NETWORK || "localhost";
+// Use devnet by default, can override with env variable
+export const SOLANA_NETWORK = process.env.NEXT_PUBLIC_SOLANA_NETWORK || "devnet";
 export const SOLANA_RPC_URL = SOLANA_NETWORK === "localhost" 
   ? "http://localhost:8899" 
   : clusterApiUrl(SOLANA_NETWORK as "devnet" | "mainnet-beta");

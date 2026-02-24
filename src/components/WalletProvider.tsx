@@ -20,7 +20,7 @@ interface Props {
 
 export const WalletProviderWrapper: FC<Props> = ({ children }) => {
   const endpoint = useMemo(() => {
-    const network = process.env.NEXT_PUBLIC_SOLANA_NETWORK || "localhost";
+    const network = process.env.NEXT_PUBLIC_SOLANA_NETWORK || "devnet";
     return network === "localhost" 
       ? "http://localhost:8899" 
       : clusterApiUrl(network as "devnet" | "mainnet-beta");
