@@ -16,6 +16,7 @@ import {
   saveRegisteredProperty,
   createPropertyFromRegistration,
 } from "@/lib/propertyStore";
+import { FileUpload } from "@/components/FileUpload";
 
 type Step = "details" | "tokenization" | "confirm" | "processing" | "success";
 
@@ -32,6 +33,8 @@ interface PropertyFormData {
   features: string[];
   image: string;
   propertyValue: number;
+  photos: string[];
+  certificates: string[];
 }
 
 interface TokenizationData {
@@ -97,6 +100,8 @@ export default function RegisterPropertyPage() {
     features: [],
     image: "",
     propertyValue: 0,
+    photos: [],
+    certificates: [],
   });
 
   const [tokenData, setTokenData] = useState<TokenizationData>({
@@ -222,7 +227,9 @@ export default function RegisterPropertyPage() {
       propertyData.location.length > 0 &&
       propertyData.city.length > 0 &&
       propertyData.propertyValue > 0 &&
-      propertyData.size > 0
+      propertyData.size > 0 &&
+      propertyData.photos.length > 0 &&
+      propertyData.certificates.length > 0
     );
   };
 
@@ -575,6 +582,38 @@ export default function RegisterPropertyPage() {
                     ))}
                   </div>
                 </div>
+
+                {/* Property Photos */}
+                <div className="md:col-span-2">
+                  <FileUpload
+                    label="Property Photos *"
+                    description="Upload photos of your property (exterior, interior, etc.)"
+                    multiple={true}
+                    maxFiles={10}
+                    accept="image/*"
+                    folder="property-photos"
+                    existingFiles={propertyData.photos}
+                    onUpload={(urls) => {
+                      setPropertyData({ ...propertyData, photos: urls, image: urls[0] || "" });
+                    }}
+                  />
+                </div>
+
+                {/* Property Certificates */}
+                <div className="md:col-span-2">
+                  <FileUpload
+                    label="Property Certificates *"
+                    description="Upload ownership documents, title deeds, or registration certificates"
+                    multiple={true}
+                    maxFiles={5}
+                    accept="image/*,application/pdf"
+                    folder="property-certificates"
+                    existingFiles={propertyData.certificates}
+                    onUpload={(urls) => {
+                      setPropertyData({ ...propertyData, certificates: urls });
+                    }}
+                  />
+                </div>
               </div>
 
               {/* Navigation */}
@@ -899,6 +938,48 @@ export default function RegisterPropertyPage() {
                         <p className="text-gray-400 text-xs">Network</p>
                         <p className="text-cyan-400 font-medium">Solana {SOLANA_NETWORK}</p>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Uploaded Files Preview */}
+              <div className="bg-white/5 border border-white/10 rounded-2xl p-6 mb-8">
+                <h3 className="text-gray-400 text-sm mb-4 uppercase tracking-wider">Uploaded Files</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <p className="text-gray-400 text-xs mb-2">Photos ({propertyData.photos.length})</p>
+                    <div className="flex gap-2 flex-wrap">
+                      {propertyData.photos.slice(0, 4).map((url, i) => (
+                        <img
+                          key={i}
+                          src={url}
+                          alt={`Photo ${i + 1}`}
+                          className="w-16 h-16 object-cover rounded-lg"
+                        />
+                      ))}
+                      {propertyData.photos.length > 4 && (
+                        <div className="w-16 h-16 bg-white/10 rounded-lg flex items-center justify-center text-gray-400 text-sm">
+                          +{propertyData.photos.length - 4}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-gray-400 text-xs mb-2">Certificates ({propertyData.certificates.length})</p>
+                    <div className="flex gap-2 flex-wrap">
+                      {propertyData.certificates.map((url, i) => (
+                        <a
+                          key={i}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-16 h-16 bg-emerald-500/10 rounded-lg flex flex-col items-center justify-center text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                        >
+                          <span className="text-xl">📄</span>
+                          <span className="text-xs">Doc {i + 1}</span>
+                        </a>
+                      ))}
                     </div>
                   </div>
                 </div>

@@ -24,6 +24,9 @@ export interface RegisteredProperty extends Omit<Property, "id" | "image" | "ima
   totalRaised: number;
   investorCount: number;
   campaignAddress?: string;
+  // Uploaded files
+  certificates: string[];
+  uploadedPhotos: string[];
 }
 
 // Get all registered properties from localStorage
@@ -85,6 +88,8 @@ export function createPropertyFromRegistration(
     yearBuilt: number;
     features: string[];
     propertyValue: number;
+    photos?: string[];
+    certificates?: string[];
   },
   tokenData: {
     totalTokens: number;
@@ -113,14 +118,18 @@ export function createPropertyFromRegistration(
   const deadline = new Date();
   deadline.setDate(deadline.getDate() + fundingDeadlineDays);
   
+  // Use uploaded photos or fallback to defaults
+  const photos = formData.photos && formData.photos.length > 0 ? formData.photos : defaultPropertyImages;
+  const certificates = formData.certificates || [];
+  
   return {
     id,
     name: formData.name,
     location: `${formData.location}, ${formData.city}`,
     city: formData.city,
     description: formData.description || `Tokenized property in ${formData.city}`,
-    image: defaultPropertyImages[0],
-    images: defaultPropertyImages,
+    image: photos[0],
+    images: photos,
     price: priceUSD,
     priceInPKR: formData.propertyValue,
     tokenPrice: Math.round(tokenData.pricePerToken / 278), // PKR to USD
@@ -137,7 +146,10 @@ export function createPropertyFromRegistration(
     rentalIncome: Math.round(priceUSD * 0.005), // Estimate ~0.5% monthly
     occupancyRate: 90, // Default estimate
     documents: [
-      { name: "Property Registration", url: "#" },
+      ...certificates.map((cert, i) => ({
+        name: `Certificate ${i + 1}`,
+        url: cert,
+      })),
       { name: "Token Details", url: `https://explorer.solana.com/address/${blockchainData.mintAddress}?cluster=devnet` },
     ],
     timeline: [
@@ -156,6 +168,8 @@ export function createPropertyFromRegistration(
     totalRaised: 0,
     investorCount: 0,
     campaignAddress: blockchainData.campaignAddress,
+    certificates,
+    uploadedPhotos: photos,
   };
 }
 
