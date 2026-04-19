@@ -24,7 +24,7 @@ import {
   Gift,
   Sparkles,
 } from "lucide-react";
-import { getRegisteredProperties, RegisteredProperty } from "@/lib/propertyStore";
+import { getRegisteredProperties, getPropertiesByOwner, RegisteredProperty } from "@/lib/propertyStore";
 import { connection, getSolBalance } from "@/lib/solana";
 
 interface TokenHolding {
@@ -41,6 +41,7 @@ export default function DashboardPage() {
   const [holdings, setHoldings] = useState<TokenHolding[]>([]);
   const [loading, setLoading] = useState(true);
   const [solBalance, setSolBalance] = useState(0);
+  const [ownedProperties, setOwnedProperties] = useState<RegisteredProperty[]>([]);
 
   useEffect(() => {
     if (connected && publicKey) {
@@ -67,6 +68,10 @@ export default function DashboardPage() {
     setLoading(true);
     try {
       const properties = getRegisteredProperties();
+      
+      // Check if user owns any properties
+      const owned = getPropertiesByOwner(publicKey.toBase58());
+      setOwnedProperties(owned);
       const tokenHoldings: TokenHolding[] = [];
 
       for (const property of properties) {
@@ -189,7 +194,13 @@ export default function DashboardPage() {
               <span className="solana-badge">Solana Devnet</span>
             </div>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-wrap">
+            {ownedProperties.length > 0 && (
+              <Link href="/admin/dividends" className="btn-primary flex items-center gap-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600">
+                <Banknote className="w-4 h-4" />
+                Distribute Dividends
+              </Link>
+            )}
             <Link href="/marketplace" className="btn-secondary flex items-center gap-2">
               <Coins className="w-4 h-4" />
               Marketplace
