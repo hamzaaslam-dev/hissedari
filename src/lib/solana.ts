@@ -131,9 +131,17 @@ export async function createPropertyTokenMint(
   // Sign with wallet
   const signedTx = await wallet.signTransaction(transaction);
   
-  // Send transaction
-  const signature = await connection.sendRawTransaction(signedTx.serialize());
-  await connection.confirmTransaction(signature, "confirmed");
+  // Send transaction with skipPreflight to avoid simulation issues
+  const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+    skipPreflight: true,
+    preflightCommitment: "confirmed",
+  });
+  
+  // Wait for confirmation with timeout
+  const confirmation = await connection.confirmTransaction(signature, "confirmed");
+  if (confirmation.value.err) {
+    throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+  }
   
   return {
     mintAddress: mintKeypair.publicKey,
@@ -190,9 +198,17 @@ export async function mintPropertyTokens(
   // Sign with wallet
   const signedTx = await wallet.signTransaction(transaction);
   
-  // Send transaction
-  const signature = await connection.sendRawTransaction(signedTx.serialize());
-  await connection.confirmTransaction(signature, "confirmed");
+  // Send transaction with skipPreflight to avoid simulation issues
+  const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+    skipPreflight: true,
+    preflightCommitment: "confirmed",
+  });
+  
+  // Wait for confirmation with timeout
+  const confirmation = await connection.confirmTransaction(signature, "confirmed");
+  if (confirmation.value.err) {
+    throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+  }
   
   return {
     tokenAccount: associatedTokenAddress,
