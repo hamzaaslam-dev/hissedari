@@ -16,7 +16,7 @@ import {
   Wallet,
   AlertCircle,
 } from "lucide-react";
-import { getRegisteredProperties, getPropertiesByOwner, RegisteredProperty } from "@/lib/propertyStore";
+import { getPropertiesByOwnerAsync, RegisteredProperty } from "@/lib/propertyStore";
 import {
   initializeDividendPool,
   depositDividend,
@@ -64,7 +64,7 @@ export default function AdminDividendsPage() {
       setSolBalance(balance);
 
       // Get properties owned by this wallet
-      const ownedProperties = getPropertiesByOwner(publicKey.toBase58());
+      const ownedProperties = await getPropertiesByOwnerAsync(publicKey.toBase58());
       
       // Fetch dividend pool info for each property
       const propertiesWithDividends: PropertyWithDividend[] = [];

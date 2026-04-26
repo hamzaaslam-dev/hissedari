@@ -24,7 +24,7 @@ import {
   Gift,
   Sparkles,
 } from "lucide-react";
-import { getRegisteredProperties, getPropertiesByOwner, RegisteredProperty } from "@/lib/propertyStore";
+import { getRegisteredPropertiesAsync, getPropertiesByOwnerAsync, RegisteredProperty } from "@/lib/propertyStore";
 import { connection, getSolBalance } from "@/lib/solana";
 
 interface TokenHolding {
@@ -67,10 +67,11 @@ export default function DashboardPage() {
     
     setLoading(true);
     try {
-      const properties = getRegisteredProperties();
+      const [properties, owned] = await Promise.all([
+        getRegisteredPropertiesAsync(),
+        getPropertiesByOwnerAsync(publicKey.toBase58()),
+      ]);
       
-      // Check if user owns any properties
-      const owned = getPropertiesByOwner(publicKey.toBase58());
       setOwnedProperties(owned);
       const tokenHoldings: TokenHolding[] = [];
 

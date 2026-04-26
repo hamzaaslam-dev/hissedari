@@ -8,7 +8,7 @@ import { getAssociatedTokenAddress, getAccount } from "@solana/spl-token";
 import { ArrowLeft, Coins, Tag, Loader2, CheckCircle2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getRegisteredProperties, RegisteredProperty } from "@/lib/propertyStore";
+import { getRegisteredPropertiesAsync, RegisteredProperty } from "@/lib/propertyStore";
 import { createListing, solToLamports, fetchListing } from "@/lib/marketplaceClient";
 import { connection } from "@/lib/solana";
 
@@ -43,7 +43,7 @@ export default function SellPage() {
     
     setLoading(true);
     try {
-      const properties = getRegisteredProperties();
+      const properties = await getRegisteredPropertiesAsync();
       const tokenHoldings: TokenHolding[] = [];
 
       for (const property of properties) {

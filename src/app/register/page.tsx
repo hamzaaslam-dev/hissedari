@@ -13,7 +13,7 @@ import {
   SOLANA_NETWORK,
 } from "@/lib/solana";
 import {
-  saveRegisteredProperty,
+  saveRegisteredPropertyAsync,
   createPropertyFromRegistration,
 } from "@/lib/propertyStore";
 import { FileUpload } from "@/components/FileUpload";
@@ -201,7 +201,12 @@ export default function RegisterPropertyPage() {
           transactionSignature: tokenResult.mintSignature,
         }
       );
-      saveRegisteredProperty(registeredProperty);
+      
+      // Save to database
+      const saved = await saveRegisteredPropertyAsync(registeredProperty);
+      if (!saved) {
+        console.warn("Failed to save property to database, but tokenization succeeded");
+      }
 
       setCurrentStep("success");
     } catch (e: unknown) {

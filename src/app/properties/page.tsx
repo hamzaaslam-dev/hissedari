@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { Search, SlidersHorizontal, X, MapPin, Building2, TrendingUp } from "lucide-react";
 import { PropertyCard } from "@/components/PropertyCard";
 import { properties as defaultProperties, Property } from "@/data/properties";
-import { getRegisteredProperties, RegisteredProperty } from "@/lib/propertyStore";
+import { getRegisteredPropertiesAsync, RegisteredProperty } from "@/lib/propertyStore";
 
 type PropertyType = Property["propertyType"] | "all";
 type PropertyStatus = Property["status"] | "all";
@@ -18,10 +18,21 @@ export default function PropertiesPage() {
   const [sortBy, setSortBy] = useState<SortOption>("newest");
   const [showFilters, setShowFilters] = useState(false);
   const [userProperties, setUserProperties] = useState<RegisteredProperty[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Load user-registered properties from localStorage
+  // Load user-registered properties from database
   useEffect(() => {
-    setUserProperties(getRegisteredProperties());
+    const loadProperties = async () => {
+      try {
+        const properties = await getRegisteredPropertiesAsync();
+        setUserProperties(properties);
+      } catch (error) {
+        console.error("Error loading properties:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadProperties();
   }, []);
 
   // Combine default and user properties

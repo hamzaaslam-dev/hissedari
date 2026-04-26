@@ -1,17 +1,14 @@
-import { put } from "@vercel/blob";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getSupabase } from "@/lib/supabase";
 
-export async function POST(request: Request): Promise<NextResponse> {
+export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
-    const file = formData.get("file") as File;
-    const folder = formData.get("folder") as string || "uploads";
+    const file = formData.get("file") as File | null;
+    const folder = (formData.get("folder") as string) || "uploads";
 
     if (!file) {
-      return NextResponse.json(
-        { error: "No file provided" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
     // Validate file type
@@ -39,33 +36,48 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    // Generate unique filename
-    const timestamp = Date.now();
-    const extension = file.name.split(".").pop();
-    const filename = `${folder}/${timestamp}-${Math.random().toString(36).substring(7)}.${extension}`;
+    const supabase = getSupabase();
 
-    // Upload to Vercel Blob
-    const blob = await put(filename, file, {
-      access: "public",
-    });
+    // Generate unique filename
+    const fileExt = file.name.split(".").pop();
+    const fileName = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${fileExt}`;
+    const filePath = `${folder}/${fileName}`;
+
+    // Convert File to ArrayBuffer then to Buffer for upload
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // Upload to Supabase Storage
+    const { data, error } = await supabase.storage
+      .from("property-files")
+      .upload(filePath, buffer, {
+        contentType: file.type,
+        cacheControl: "3600",
+        upsert: false,
+      });
+
+    if (error) {
+      console.error("Supabase storage error:", error);
+      return NextResponse.json(
+        { error: `Failed to upload: ${error.message}` },
+        { status: 500 }
+      );
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from("property-files")
+      .getPublicUrl(filePath);
 
     return NextResponse.json({
-      url: blob.url,
-      filename: blob.pathname,
-      size: file.size,
-      type: file.type,
+      url: urlData.publicUrl,
+      pathname: filePath,
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Upload error:", error);
     return NextResponse.json(
-      { error: error.message || "Upload failed" },
+      { error: "Failed to upload file" },
       { status: 500 }
     );
   }
 }
-
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};

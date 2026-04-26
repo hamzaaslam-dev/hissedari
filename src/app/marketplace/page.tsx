@@ -14,7 +14,7 @@ import {
   lamportsToSol,
   solToLamports,
 } from "@/lib/marketplaceClient";
-import { getRegisteredProperties, RegisteredProperty } from "@/lib/propertyStore";
+import { getRegisteredPropertiesAsync, RegisteredProperty } from "@/lib/propertyStore";
 
 export default function MarketplacePage() {
   const { publicKey, signTransaction, connected } = useWallet();
@@ -32,15 +32,15 @@ export default function MarketplacePage() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [listingsData, statsData] = await Promise.all([
+      const [listingsData, statsData, props] = await Promise.all([
         fetchAllListings(),
         fetchMarketplaceStats(),
+        getRegisteredPropertiesAsync(),
       ]);
       setListings(listingsData);
       setStats(statsData);
 
-      // Load property info from local storage
-      const props = getRegisteredProperties();
+      // Load property info from database
       const propsMap: Record<string, RegisteredProperty> = {};
       props.forEach((p) => {
         if (p.mintAddress) {
