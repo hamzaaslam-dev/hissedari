@@ -30,7 +30,7 @@ import {
   Droplets,
 } from "lucide-react";
 import { getPropertyById, Property } from "@/data/properties";
-import { getRegisteredPropertyById, RegisteredProperty } from "@/lib/propertyStore";
+import { getRegisteredPropertyByIdAsync, RegisteredProperty } from "@/lib/propertyStore";
 import { getSolBalance, getExplorerUrl, SOLANA_NETWORK, connection } from "@/lib/solana";
 import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
@@ -55,10 +55,27 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
   const [purchaseSuccess, setPurchaseSuccess] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [txSignature, setTxSignature] = useState<string | null>(null);
+  const [registeredProperty, setRegisteredProperty] = useState<RegisteredProperty | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Load property from database
+  useEffect(() => {
+    async function loadProperty() {
+      setIsLoading(true);
+      try {
+        const prop = await getRegisteredPropertyByIdAsync(id);
+        setRegisteredProperty(prop);
+      } catch (error) {
+        console.error("Error loading property:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadProperty();
+  }, [id]);
 
   // Try to get property from both sources
   const defaultProperty = getPropertyById(id);
-  const registeredProperty = getRegisteredPropertyById(id);
   const property: (Property & { mintAddress?: string; ownerAddress?: string }) | undefined = 
     registeredProperty || defaultProperty;
   
@@ -79,6 +96,17 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
     }
     fetchBalance();
   }, [publicKey]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen pt-28 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-accent mx-auto mb-4" />
+          <p className="text-foreground-muted">Loading property...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!property) {
     return (
