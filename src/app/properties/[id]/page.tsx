@@ -101,8 +101,8 @@ export default function PropertyDetailPage({ params }: PropertyPageProps) {
     return (
       <div className="min-h-screen pt-28 flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin text-accent mx-auto mb-4" />
-          <p className="text-foreground-muted">Loading property...</p>
+          <Loader2 className="w-12 h-12 animate-spin text-accent mx-auto mb-4" />
+          <p className="text-foreground-muted text-lg">Loading property details...</p>
         </div>
       </div>
     );
