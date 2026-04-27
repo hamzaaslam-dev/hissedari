@@ -25,8 +25,17 @@ export interface RegisteredProperty extends Omit<Property, "id" | "image" | "ima
   uploadedPhotos: string[];
 }
 
-// API base URL
-const API_BASE = "/api/properties";
+// API base URL - use relative URL for client-side requests
+const getApiBase = () => {
+  if (typeof window !== "undefined") {
+    return "/api/properties";
+  }
+  // For server-side, construct full URL
+  const baseUrl = process.env.NEXT_PUBLIC_VERCEL_URL 
+    ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}`
+    : process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  return `${baseUrl}/api/properties`;
+};
 
 // Convert database property to RegisteredProperty format
 function dbToRegisteredProperty(dbProp: Record<string, unknown>): RegisteredProperty {
@@ -116,9 +125,10 @@ function registeredPropertyToDb(prop: RegisteredProperty): Record<string, unknow
 // Get all registered properties from database
 export async function getRegisteredPropertiesAsync(): Promise<RegisteredProperty[]> {
   try {
-    const response = await fetch(API_BASE);
+    const apiUrl = getApiBase();
+    const response = await fetch(apiUrl, { cache: "no-store" });
     if (!response.ok) {
-      throw new Error("Failed to fetch properties");
+      throw new Error(`Failed to fetch properties: ${response.status}`);
     }
     const data = await response.json();
     return (data.properties || []).map(dbToRegisteredProperty);
@@ -138,7 +148,8 @@ export function getRegisteredProperties(): RegisteredProperty[] {
 // Save a new registered property to database
 export async function saveRegisteredPropertyAsync(property: RegisteredProperty): Promise<boolean> {
   try {
-    const response = await fetch(API_BASE, {
+    const apiUrl = getApiBase();
+    const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -147,7 +158,7 @@ export async function saveRegisteredPropertyAsync(property: RegisteredProperty):
     });
     
     if (!response.ok) {
-      throw new Error("Failed to save property");
+      throw new Error(`Failed to save property: ${response.status}`);
     }
     
     return true;
@@ -166,9 +177,10 @@ export function saveRegisteredProperty(property: RegisteredProperty): void {
 // Get a property by ID
 export async function getRegisteredPropertyByIdAsync(id: string): Promise<RegisteredProperty | undefined> {
   try {
-    const response = await fetch(`${API_BASE}?id=${encodeURIComponent(id)}`);
+    const apiUrl = getApiBase();
+    const response = await fetch(`${apiUrl}?id=${encodeURIComponent(id)}`, { cache: "no-store" });
     if (!response.ok) {
-      throw new Error("Failed to fetch property");
+      throw new Error(`Failed to fetch property: ${response.status}`);
     }
     const data = await response.json();
     const properties = (data.properties || []).map(dbToRegisteredProperty);
@@ -188,9 +200,10 @@ export function getRegisteredPropertyById(id: string): RegisteredProperty | unde
 // Get property by mint address
 export async function getPropertyByMintAddress(mintAddress: string): Promise<RegisteredProperty | undefined> {
   try {
-    const response = await fetch(`${API_BASE}?mint=${encodeURIComponent(mintAddress)}`);
+    const apiUrl = getApiBase();
+    const response = await fetch(`${apiUrl}?mint=${encodeURIComponent(mintAddress)}`, { cache: "no-store" });
     if (!response.ok) {
-      throw new Error("Failed to fetch property");
+      throw new Error(`Failed to fetch property: ${response.status}`);
     }
     const data = await response.json();
     const properties = (data.properties || []).map(dbToRegisteredProperty);
@@ -204,9 +217,10 @@ export async function getPropertyByMintAddress(mintAddress: string): Promise<Reg
 // Get properties by owner address
 export async function getPropertiesByOwnerAsync(ownerAddress: string): Promise<RegisteredProperty[]> {
   try {
-    const response = await fetch(`${API_BASE}?owner=${encodeURIComponent(ownerAddress)}`);
+    const apiUrl = getApiBase();
+    const response = await fetch(`${apiUrl}?owner=${encodeURIComponent(ownerAddress)}`, { cache: "no-store" });
     if (!response.ok) {
-      throw new Error("Failed to fetch properties");
+      throw new Error(`Failed to fetch properties: ${response.status}`);
     }
     const data = await response.json();
     return (data.properties || []).map(dbToRegisteredProperty);
@@ -337,6 +351,7 @@ export async function updatePropertyCampaignStatusAsync(
   investorCount?: number
 ): Promise<boolean> {
   try {
+    const apiUrl = getApiBase();
     const updates: Record<string, unknown> = {
       id: propertyId,
       campaignStatus: status,
@@ -352,7 +367,7 @@ export async function updatePropertyCampaignStatusAsync(
       updates.status = "active";
     }
     
-    const response = await fetch(API_BASE, {
+    const response = await fetch(apiUrl, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
