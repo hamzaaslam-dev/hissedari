@@ -4,6 +4,7 @@ import {
   Transaction,
   SystemProgram,
   LAMPORTS_PER_SOL,
+  SendTransactionError,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -12,6 +13,43 @@ import {
 } from "@solana/spl-token";
 import { connection } from "./solana";
 import BN from "bn.js";
+
+// Approximate cost (in lamports) of creating an associated token account.
+// We add a buffer on top of the on-chain rent-exempt minimum because the
+// wallet also needs to pay the transaction fee.
+const ATA_RENT_LAMPORTS = 2_039_280;
+const TX_FEE_BUFFER_LAMPORTS = 100_000;
+
+// Sends a signed transaction and, on simulation failure, decodes the
+// SendTransactionError to surface logs in the thrown message instead of the
+// useless "Logs: []" the wallet shows by default.
+async function sendAndConfirmSigned(signedTx: Transaction): Promise<string> {
+  try {
+    const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+      skipPreflight: false,
+      preflightCommitment: "confirmed",
+    });
+    const confirmation = await connection.confirmTransaction(signature, "confirmed");
+    if (confirmation.value.err) {
+      throw new Error(
+        `Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`
+      );
+    }
+    return signature;
+  } catch (err) {
+    if (err instanceof SendTransactionError) {
+      let logs: string[] | null = null;
+      try {
+        logs = await err.getLogs(connection);
+      } catch {
+        logs = null;
+      }
+      const detail = logs && logs.length > 0 ? `\nLogs:\n${logs.join("\n")}` : "";
+      throw new Error(`${err.message}${detail}`);
+    }
+    throw err;
+  }
+}
 
 // Program ID
 export const MARKETPLACE_PROGRAM_ID = new PublicKey(
@@ -231,10 +269,7 @@ export async function createListing(
   transaction.feePayer = wallet.publicKey;
 
   const signedTx = await wallet.signTransaction(transaction);
-  const signature = await connection.sendRawTransaction(signedTx.serialize());
-  await connection.confirmTransaction(signature, "confirmed");
-
-  return signature;
+  return sendAndConfirmSigned(signedTx);
 }
 
 export async function buyTokens(
@@ -242,8 +277,32 @@ export async function buyTokens(
   seller: PublicKey,
   tokenMint: PublicKey,
   platformWallet: PublicKey,
-  amount: number
+  amount: number,
+  pricePerTokenLamports: number
 ): Promise<string> {
+  // Pre-flight balance check. The Solana runtime returns the misleading error
+  // "Attempt to debit an account but found no record of a prior credit"
+  // whenever the fee payer can't cover the transaction. We surface a clear
+  // message before the user is asked to sign.
+  const buyerBalance = await connection.getBalance(wallet.publicKey);
+
+  // Check whether the buyer already has an ATA for this mint - if not, the
+  // tx will allocate one and the buyer pays its rent.
+  const buyerAta = await getAssociatedTokenAddress(tokenMint, wallet.publicKey);
+  const buyerAtaInfo = await connection.getAccountInfo(buyerAta);
+  const ataRent = buyerAtaInfo ? 0 : ATA_RENT_LAMPORTS;
+
+  const totalCost = amount * pricePerTokenLamports + ataRent + TX_FEE_BUFFER_LAMPORTS;
+
+  if (buyerBalance < totalCost) {
+    const needed = (totalCost / LAMPORTS_PER_SOL).toFixed(4);
+    const have = (buyerBalance / LAMPORTS_PER_SOL).toFixed(4);
+    throw new Error(
+      `Insufficient SOL. You need at least ~${needed} SOL but your wallet has ${have} SOL. ` +
+        `On devnet you can request an airdrop from https://faucet.solana.com.`
+    );
+  }
+
   const transaction = await buyTokensInstruction(
     wallet.publicKey,
     seller,
@@ -257,10 +316,7 @@ export async function buyTokens(
   transaction.feePayer = wallet.publicKey;
 
   const signedTx = await wallet.signTransaction(transaction);
-  const signature = await connection.sendRawTransaction(signedTx.serialize());
-  await connection.confirmTransaction(signature, "confirmed");
-
-  return signature;
+  return sendAndConfirmSigned(signedTx);
 }
 
 export async function cancelListing(
@@ -274,10 +330,7 @@ export async function cancelListing(
   transaction.feePayer = wallet.publicKey;
 
   const signedTx = await wallet.signTransaction(transaction);
-  const signature = await connection.sendRawTransaction(signedTx.serialize());
-  await connection.confirmTransaction(signature, "confirmed");
-
-  return signature;
+  return sendAndConfirmSigned(signedTx);
 }
 
 // Read Functions

@@ -63,15 +63,22 @@ export default function MarketplacePage() {
       return;
     }
 
+    if (!stats?.authority) {
+      alert(
+        "Marketplace is not initialized yet. Please ask the platform admin to run the init script before purchasing."
+      );
+      return;
+    }
+
     setPurchasing(listing.address.toString());
     try {
-      const platformWallet = stats?.authority || publicKey;
       const signature = await buyTokens(
         { publicKey, signTransaction },
         listing.seller,
         listing.tokenMint,
-        platformWallet,
-        amount
+        stats.authority,
+        amount,
+        listing.pricePerToken
       );
       alert(`Purchase successful! Signature: ${signature.slice(0, 20)}...`);
       loadData();
