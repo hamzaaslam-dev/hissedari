@@ -6,8 +6,7 @@ import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
-import { PublicKey } from "@solana/web3.js";
-import { getAssociatedTokenAddress, getAccount } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   Wallet,
   TrendingUp,
@@ -31,6 +30,46 @@ interface TokenHolding {
   property: RegisteredProperty;
   balance: number;
   value: number;
+}
+
+function buildUnknownPropertyFromMint(mint: string): RegisteredProperty {
+  const now = new Date().toISOString();
+  return {
+    id: `mint-${mint}`,
+    name: "Property Token",
+    location: "Unknown location",
+    city: "Unknown",
+    description: "Token purchased from marketplace. Property metadata is not available yet.",
+    image: "",
+    images: [],
+    mintAddress: mint,
+    tokenAccount: "",
+    ownerAddress: "",
+    createdAt: now,
+    transactionSignature: "",
+    rentalIncome: 0,
+    occupancyRate: 0,
+    documents: [],
+    timeline: [],
+    platformEquityPercent: 0,
+    fundingDeadline: now,
+    campaignStatus: "active",
+    totalRaised: 0,
+    investorCount: 0,
+    certificates: [],
+    uploadedPhotos: [],
+    price: 0,
+    priceInPKR: 0,
+    tokenPrice: 0,
+    totalTokens: 1,
+    availableTokens: 0,
+    annualYield: 0,
+    propertyType: "mixed-use",
+    status: "active",
+    features: [],
+    size: 0,
+    yearBuilt: new Date().getFullYear(),
+  };
 }
 
 export default function DashboardPage() {
@@ -67,34 +106,40 @@ export default function DashboardPage() {
     
     setLoading(true);
     try {
-      const [properties, owned] = await Promise.all([
+      const [properties, owned, tokenAccountsResp] = await Promise.all([
         getRegisteredPropertiesAsync(),
         getPropertiesByOwnerAsync(publicKey.toBase58()),
+        connection.getParsedTokenAccountsByOwner(publicKey, {
+          programId: TOKEN_PROGRAM_ID,
+        }),
       ]);
       
       setOwnedProperties(owned);
       const tokenHoldings: TokenHolding[] = [];
-
+      const propertiesByMint = new Map<string, RegisteredProperty>();
       for (const property of properties) {
-        if (!property.mintAddress) continue;
-
-        try {
-          const mint = new PublicKey(property.mintAddress);
-          const tokenAccount = await getAssociatedTokenAddress(mint, publicKey);
-          
-          const account = await getAccount(connection, tokenAccount);
-          const balance = Number(account.amount);
-
-          if (balance > 0) {
-            tokenHoldings.push({
-              property,
-              balance,
-              value: balance * property.tokenPrice,
-            });
-          }
-        } catch {
-          // Token account doesn't exist or no balance
+        if (property.mintAddress) {
+          propertiesByMint.set(property.mintAddress, property);
         }
+      }
+
+      // Aggregate balances across all token accounts per mint (ATA or non-ATA).
+      const balancesByMint = new Map<string, number>();
+      for (const { account } of tokenAccountsResp.value) {
+        const parsedInfo = account.data.parsed.info;
+        const mint = parsedInfo.mint as string;
+        const amount = Number(parsedInfo.tokenAmount?.amount || 0);
+        if (amount <= 0) continue;
+        balancesByMint.set(mint, (balancesByMint.get(mint) || 0) + amount);
+      }
+
+      for (const [mint, balance] of balancesByMint.entries()) {
+        const property = propertiesByMint.get(mint) || buildUnknownPropertyFromMint(mint);
+        tokenHoldings.push({
+          property,
+          balance,
+          value: balance * property.tokenPrice,
+        });
       }
 
       setHoldings(tokenHoldings);
