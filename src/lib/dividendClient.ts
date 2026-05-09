@@ -229,7 +229,7 @@ export async function claimDividendInstruction(
   const keys = [
     { pubkey: user, isSigner: true, isWritable: true },
     { pubkey: dividendPool, isSigner: false, isWritable: false },
-    { pubkey: distributionRecord, isSigner: false, isWritable: false },
+    { pubkey: distributionRecord, isSigner: false, isWritable: true },
     { pubkey: dividendVault, isSigner: false, isWritable: true },
     { pubkey: userTokenAccount, isSigner: false, isWritable: false },
     { pubkey: claimRecord, isSigner: false, isWritable: true },
@@ -241,6 +241,100 @@ export async function claimDividendInstruction(
     programId: DIVIDEND_PROGRAM_ID,
     data,
   });
+}
+
+/** Anchor account size for `ClaimRecord` (discriminator + body + padding). */
+const CLAIM_RECORD_ANCHOR_ACCOUNT_SIZE = 8 + 32 + 32 + 8 + 8 + 8 + 1 + 1 + 32;
+
+/** In full account data: 8-byte disc + 32-byte user; distribution pubkey starts here. */
+const CLAIM_ACCOUNT_MEMCMP_DISTRIBUTION_OFFSET = 40;
+
+function readAmountClaimedLamportsFromClaimBody(body: Buffer): bigint {
+  if (body.length < 80) return BigInt(0);
+  return body.readBigUInt64LE(72);
+}
+
+/**
+ * Sum of `amount_claimed` (lamports) across all `ClaimRecord` accounts for this
+ * distribution. Used to cap per-wallet claim UI so a buyer does not see a full
+ * epoch payout after a prior holder already claimed (the on-chain formula uses
+ * current token balance × amount_per_token).
+ */
+export async function sumClaimedLamportsForDistribution(
+  distributionRecordPubkey: PublicKey
+): Promise<bigint> {
+  try {
+    const accounts = await connection.getProgramAccounts(DIVIDEND_PROGRAM_ID, {
+      filters: [
+        { dataSize: CLAIM_RECORD_ANCHOR_ACCOUNT_SIZE },
+        {
+          memcmp: {
+            offset: CLAIM_ACCOUNT_MEMCMP_DISTRIBUTION_OFFSET,
+            bytes: distributionRecordPubkey.toBase58(),
+          },
+        },
+      ],
+      commitment: "confirmed",
+    });
+    let sum = BigInt(0);
+    for (const { account } of accounts) {
+      sum += readAmountClaimedLamportsFromClaimBody(account.data.slice(8));
+    }
+    return sum;
+  } catch (e) {
+    console.warn("sumClaimedLamportsForDistribution failed:", e);
+    return BigInt(0);
+  }
+}
+
+export async function setDistributionTotalClaimedInstruction(
+  authority: PublicKey,
+  propertyMint: PublicKey,
+  epoch: number,
+  newTotalClaimedLamports: bigint
+): Promise<Transaction> {
+  const [dividendPool] = getDividendPoolPDA(propertyMint);
+  const [distributionRecord] = getDistributionRecordPDA(dividendPool, epoch);
+
+  const discriminator = Buffer.from([
+    0x60, 0x93, 0xaf, 0x84, 0xc7, 0x50, 0x4f, 0xac,
+  ]);
+  const epochBuf = u64LE(epoch);
+  const totalBuf = u64LE(newTotalClaimedLamports);
+  const data = Buffer.concat([discriminator, epochBuf, totalBuf]);
+
+  const keys = [
+    { pubkey: authority, isSigner: true, isWritable: true },
+    { pubkey: dividendPool, isSigner: false, isWritable: false },
+    { pubkey: distributionRecord, isSigner: false, isWritable: true },
+  ];
+
+  return new Transaction().add({
+    keys,
+    programId: DIVIDEND_PROGRAM_ID,
+    data,
+  });
+}
+
+export async function setDistributionTotalClaimed(
+  wallet: WalletAdapter,
+  propertyMint: PublicKey,
+  epoch: number,
+  newTotalClaimedLamports: bigint
+): Promise<string> {
+  const transaction = await setDistributionTotalClaimedInstruction(
+    wallet.publicKey,
+    propertyMint,
+    epoch,
+    newTotalClaimedLamports
+  );
+  const { blockhash } = await connection.getLatestBlockhash();
+  transaction.recentBlockhash = blockhash;
+  transaction.feePayer = wallet.publicKey;
+  const signedTx = await wallet.signTransaction(transaction);
+  const signature = await connection.sendRawTransaction(signedTx.serialize());
+  await connection.confirmTransaction(signature, "confirmed");
+  return signature;
 }
 
 // ============================================================================
@@ -485,6 +579,7 @@ export async function fetchUserDividendMintSummary(
     return { claimable, claimed };
   }
 
+  const claimedSumCache = new Map<string, bigint>();
   const upper = Math.min(pool.currentEpoch, maxEpochsToScan);
   for (let epoch = 0; epoch < upper; epoch++) {
     const dist = await fetchDistributionRecord(propertyMint, epoch);
@@ -500,7 +595,9 @@ export async function fetchUserDividendMintSummary(
       }
       continue;
     }
-    const sol = await getClaimableAmount(user, propertyMint, epoch);
+    const sol = await getClaimableAmount(user, propertyMint, epoch, {
+      claimedSumCache,
+    });
     if (sol > 1e-12) {
       claimable.push({ epoch, claimableSol: sol });
     }
@@ -597,10 +694,16 @@ export async function fetchDistributionRecord(
   return decodeDistributionRecordData(data);
 }
 
+export type GetClaimableAmountOptions = {
+  /** Reuse per-distribution sums across epochs in one scan (mint + RPC). */
+  claimedSumCache?: Map<string, bigint>;
+};
+
 export async function getClaimableAmount(
   user: PublicKey,
   propertyMint: PublicKey,
-  epoch: number
+  epoch: number,
+  opts?: GetClaimableAmountOptions
 ): Promise<number> {
   const distribution = await fetchDistributionRecord(propertyMint, epoch);
   if (!distribution) {
@@ -609,15 +712,42 @@ export async function getClaimableAmount(
 
   const userTokenAccount = await getAssociatedTokenAddress(propertyMint, user);
   const tokenAccountInfo = await connection.getAccountInfo(userTokenAccount);
-  
+
   if (!tokenAccountInfo) {
     return 0;
   }
 
-  // Parse token account to get balance (offset 64 for amount in SPL token account)
   const tokenBalance = Number(tokenAccountInfo.data.readBigUInt64LE(64));
-  
-  return (tokenBalance * distribution.amountPerToken) / LAMPORTS_PER_SOL;
+
+  const [dividendPool] = getDividendPoolPDA(propertyMint);
+  const [distributionPk] = getDistributionRecordPDA(dividendPool, epoch);
+  const cacheKey = distributionPk.toBase58();
+
+  let sumPaidLamports: bigint;
+  if (opts?.claimedSumCache?.has(cacheKey)) {
+    sumPaidLamports = opts.claimedSumCache.get(cacheKey)!;
+  } else {
+    sumPaidLamports = await sumClaimedLamportsForDistribution(distributionPk);
+    opts?.claimedSumCache?.set(cacheKey, sumPaidLamports);
+  }
+
+  const totalLamports = BigInt(distribution.totalAmount);
+  const fieldClaimedLamports = BigInt(distribution.totalClaimed);
+  const paidSoFarLamports =
+    sumPaidLamports > fieldClaimedLamports ? sumPaidLamports : fieldClaimedLamports;
+  const cappedPaidLamports =
+    paidSoFarLamports > totalLamports ? totalLamports : paidSoFarLamports;
+  const remainingLamports = totalLamports - cappedPaidLamports;
+
+  const rawLamports = BigInt(tokenBalance) * BigInt(distribution.amountPerToken);
+  const payableLamports =
+    rawLamports < remainingLamports ? rawLamports : remainingLamports;
+
+  if (payableLamports <= BigInt(0)) {
+    return 0;
+  }
+
+  return Number(payableLamports) / LAMPORTS_PER_SOL;
 }
 
 export async function hasClaimedDividend(

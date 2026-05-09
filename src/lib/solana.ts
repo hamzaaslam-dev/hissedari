@@ -31,6 +31,8 @@ import {
   getClaimableAmount,
   hasClaimedDividend,
   getDividendPoolPDA,
+  setDistributionTotalClaimed,
+  sumClaimedLamportsForDistribution,
 } from "./dividendClient";
 import {
   createCampaign,
@@ -56,6 +58,8 @@ export {
   getClaimableAmount,
   hasClaimedDividend,
   getDividendPoolPDA,
+  setDistributionTotalClaimed,
+  sumClaimedLamportsForDistribution,
 };
 
 export interface TokenizedProperty {

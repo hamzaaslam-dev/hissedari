@@ -118,25 +118,22 @@ pub mod property_dividends {
 
     /// Claim dividends for a specific epoch
     pub fn claim_dividend(ctx: Context<ClaimDividend>, epoch: u64) -> Result<()> {
-        let distribution = &ctx.accounts.distribution_record;
-        let claim_record = &mut ctx.accounts.claim_record;
-        let pool = &ctx.accounts.dividend_pool;
-        
-        // Check if already claimed
-        require!(!claim_record.claimed, DividendError::AlreadyClaimed);
-        
-        // Get user's token balance
+        require!(!ctx.accounts.claim_record.claimed, DividendError::AlreadyClaimed);
+
         let user_token_balance = ctx.accounts.user_token_account.amount;
         require!(user_token_balance > 0, DividendError::NoTokensHeld);
-        
-        // Calculate dividend amount
-        let dividend_amount = user_token_balance
+
+        let distribution = &mut ctx.accounts.distribution_record;
+        let raw = user_token_balance
             .checked_mul(distribution.amount_per_token)
             .ok_or(DividendError::Overflow)?;
-        
+        let remaining = distribution
+            .total_amount
+            .saturating_sub(distribution.total_claimed);
+        let dividend_amount = raw.min(remaining);
         require!(dividend_amount > 0, DividendError::NoDividendsToClaim);
-        
-        // Transfer SOL from vault to user
+
+        let pool = &ctx.accounts.dividend_pool;
         let pool_key = pool.key();
         let seeds = &[
             b"dividend_vault",
@@ -144,12 +141,12 @@ pub mod property_dividends {
             &[ctx.bumps.dividend_vault],
         ];
         let signer_seeds = &[&seeds[..]];
-        
+
         let transfer_ix = anchor_lang::system_program::Transfer {
             from: ctx.accounts.dividend_vault.to_account_info(),
             to: ctx.accounts.user.to_account_info(),
         };
-        
+
         anchor_lang::system_program::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.system_program.to_account_info(),
@@ -158,8 +155,13 @@ pub mod property_dividends {
             ),
             dividend_amount,
         )?;
-        
-        // Update claim record
+
+        distribution.total_claimed = distribution
+            .total_claimed
+            .checked_add(dividend_amount)
+            .ok_or(DividendError::Overflow)?;
+
+        let claim_record = &mut ctx.accounts.claim_record;
         claim_record.user = ctx.accounts.user.key();
         claim_record.distribution = distribution.key();
         claim_record.epoch = epoch;
@@ -167,31 +169,54 @@ pub mod property_dividends {
         claim_record.claimed_at = Clock::get()?.unix_timestamp;
         claim_record.claimed = true;
         claim_record.bump = ctx.bumps.claim_record;
-        
+
         emit!(DividendClaimed {
             pool: pool.key(),
             user: ctx.accounts.user.key(),
             epoch,
             amount: dividend_amount,
         });
-        
+
         Ok(())
     }
 
     /// Get claimable dividend amount for a user (view function)
-    pub fn get_claimable_amount(ctx: Context<GetClaimableAmount>, epoch: u64) -> Result<u64> {
+    pub fn get_claimable_amount(ctx: Context<GetClaimableAmount>, _epoch: u64) -> Result<u64> {
         let distribution = &ctx.accounts.distribution_record;
         let user_token_balance = ctx.accounts.user_token_account.amount;
-        
+
         if user_token_balance == 0 {
             return Ok(0);
         }
-        
-        let dividend_amount = user_token_balance
+
+        let raw = user_token_balance
             .checked_mul(distribution.amount_per_token)
             .ok_or(DividendError::Overflow)?;
-        
-        Ok(dividend_amount)
+        let remaining = distribution
+            .total_amount
+            .saturating_sub(distribution.total_claimed);
+        Ok(raw.min(remaining))
+    }
+
+    /// Pool authority: set `distribution.total_claimed` (e.g. after program upgrade to match
+    /// the sum of existing `ClaimRecord.amount_claimed` for this epoch).
+    pub fn set_distribution_total_claimed(
+        ctx: Context<SetDistributionTotalClaimed>,
+        epoch: u64,
+        new_total_claimed: u64,
+    ) -> Result<()> {
+        let dist = &mut ctx.accounts.distribution_record;
+        require!(
+            new_total_claimed <= dist.total_amount,
+            DividendError::InvalidAmount
+        );
+        dist.total_claimed = new_total_claimed;
+        emit!(DistributionClaimedTotalSynced {
+            pool: ctx.accounts.dividend_pool.key(),
+            epoch,
+            total_claimed: new_total_claimed,
+        });
+        Ok(())
     }
 
     /// Update pool authority (transfer ownership)
@@ -382,6 +407,7 @@ pub struct ClaimDividend<'info> {
     pub dividend_pool: Account<'info, DividendPool>,
     
     #[account(
+        mut,
         seeds = [b"distribution", dividend_pool.key().as_ref(), &epoch.to_le_bytes()],
         bump = distribution_record.bump
     )]
@@ -412,6 +438,27 @@ pub struct ClaimDividend<'info> {
     pub claim_record: Account<'info, ClaimRecord>,
     
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(epoch: u64)]
+pub struct SetDistributionTotalClaimed<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        seeds = [b"dividend_pool", dividend_pool.property_mint.as_ref()],
+        bump = dividend_pool.bump,
+        constraint = authority.key() == dividend_pool.authority @ DividendError::Unauthorized
+    )]
+    pub dividend_pool: Account<'info, DividendPool>,
+
+    #[account(
+        mut,
+        seeds = [b"distribution", dividend_pool.key().as_ref(), &epoch.to_le_bytes()],
+        bump = distribution_record.bump
+    )]
+    pub distribution_record: Account<'info, DistributionRecord>,
 }
 
 #[derive(Accounts)]
@@ -487,6 +534,13 @@ pub struct DividendClaimed {
     pub user: Pubkey,
     pub epoch: u64,
     pub amount: u64,
+}
+
+#[event]
+pub struct DistributionClaimedTotalSynced {
+    pub pool: Pubkey,
+    pub epoch: u64,
+    pub total_claimed: u64,
 }
 
 #[event]
