@@ -105,15 +105,26 @@ export default function DashboardPage() {
     if (!publicKey) return;
     
     setLoading(true);
-    try {
-      const [properties, owned, tokenAccountsResp] = await Promise.all([
+      try {
+      const [properties, owned, tokenAccountsResp, invRes] = await Promise.all([
         getRegisteredPropertiesAsync(),
         getPropertiesByOwnerAsync(publicKey.toBase58()),
         connection.getParsedTokenAccountsByOwner(publicKey, {
           programId: TOKEN_PROGRAM_ID,
         }),
+        fetch(`/api/properties/investments?wallet=${encodeURIComponent(publicKey.toBase58())}`, {
+          cache: "no-store",
+        }),
       ]);
-      
+
+      let primaryTotals: Record<string, number> = {};
+      try {
+        const invJson = await invRes.json();
+        primaryTotals = invJson.totalsByPropertyId || {};
+      } catch {
+        primaryTotals = {};
+      }
+
       setOwnedProperties(owned);
       const tokenHoldings: TokenHolding[] = [];
       const propertiesByMint = new Map<string, RegisteredProperty>();
@@ -133,12 +144,33 @@ export default function DashboardPage() {
         balancesByMint.set(mint, (balancesByMint.get(mint) || 0) + amount);
       }
 
-      for (const [mint, balance] of balancesByMint.entries()) {
+      // Track which property IDs we've covered via on-chain SPL holdings so we
+      // don't double count primary-market investments below.
+      const handledPropertyIds = new Set<string>();
+
+      for (const [mint, splBalance] of balancesByMint.entries()) {
         const property = propertiesByMint.get(mint) || buildUnknownPropertyFromMint(mint);
+        const recordedPrimary = primaryTotals[property.id] ?? 0;
+        const balance = splBalance + recordedPrimary;
+        handledPropertyIds.add(property.id);
+
         tokenHoldings.push({
           property,
           balance,
           value: balance * property.tokenPrice,
+        });
+      }
+
+      // Surface primary-market purchases for properties where the buyer holds
+      // no on-chain SPL balance yet (e.g. SOL-paid funding, tokens not minted).
+      for (const property of properties) {
+        if (handledPropertyIds.has(property.id)) continue;
+        const recordedPrimary = primaryTotals[property.id] ?? 0;
+        if (recordedPrimary <= 0) continue;
+        tokenHoldings.push({
+          property,
+          balance: recordedPrimary,
+          value: recordedPrimary * property.tokenPrice,
         });
       }
 
@@ -247,6 +279,14 @@ export default function DashboardPage() {
                 Distribute Dividends
               </Link>
             )}
+            <button
+              type="button"
+              onClick={() => loadPortfolio()}
+              className="btn-secondary flex items-center gap-2"
+            >
+              <Sparkles className="w-4 h-4" />
+              Refresh Portfolio
+            </button>
             <Link href="/marketplace" className="btn-secondary flex items-center gap-2">
               <Coins className="w-4 h-4" />
               Marketplace

@@ -122,3 +122,27 @@ CREATE POLICY "Anyone can update properties" ON properties
 
 -- CREATE POLICY "Anyone can upload files" ON storage.objects
 --   FOR INSERT WITH CHECK (bucket_id = 'property-files');
+
+-- ----------------------------------------------------------------------------
+-- Primary market purchases (property detail page pays SOL; SPL tokens stay demo/off-chain record)
+-- Run after existing schema:
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS property_primary_investments (
+  id TEXT PRIMARY KEY,
+  property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  buyer_address TEXT NOT NULL,
+  tokens INTEGER NOT NULL CHECK (tokens > 0),
+  transaction_signature TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_primary_investments_buyer ON property_primary_investments(buyer_address);
+CREATE INDEX IF NOT EXISTS idx_primary_investments_property ON property_primary_investments(property_id);
+
+ALTER TABLE property_primary_investments ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public read primary investments" ON property_primary_investments
+  FOR SELECT USING (true);
+
+CREATE POLICY "Anyone can insert primary investments" ON property_primary_investments
+  FOR INSERT WITH CHECK (true);

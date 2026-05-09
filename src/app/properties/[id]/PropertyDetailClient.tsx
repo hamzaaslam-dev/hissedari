@@ -52,6 +52,8 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
   const [purchaseSuccess, setPurchaseSuccess] = useState(false);
   const [purchaseError, setPurchaseError] = useState<string | null>(null);
   const [txSignature, setTxSignature] = useState<string | null>(null);
+  /** Primary-sale holdings tracked in DB so dashboard matches SOL checkout */
+  const [portfolioSynced, setPortfolioSynced] = useState<boolean | null>(null);
 
   useEffect(() => {
     async function fetchBalance() {
@@ -106,10 +108,32 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
       const signedTx = await signTransaction(transaction);
       const signature = await connection.sendRawTransaction(signedTx.serialize());
       await connection.confirmTransaction(signature, "confirmed");
-      
+
+      let synced = false;
+      try {
+        const recordRes = await fetch("/api/properties/investments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            propertyId: property.id,
+            buyerAddress: publicKey.toBase58(),
+            tokens: tokenAmount,
+            transactionSignature: signature,
+          }),
+        });
+        synced = recordRes.ok;
+        if (!recordRes.ok) {
+          const errBody = await recordRes.json().catch(() => ({}));
+          console.warn("Dashboard portfolio sync failed:", errBody?.error || recordRes.statusText);
+        }
+      } catch (syncErr) {
+        console.warn("Portfolio sync request failed:", syncErr);
+      }
+      setPortfolioSynced(synced);
+
       setTxSignature(signature);
       setPurchaseSuccess(true);
-      
+
       const newBalance = await getSolBalance(publicKey);
       setSolBalance(newBalance);
       
@@ -139,6 +163,7 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
       setVisible(true);
       return;
     }
+    setPortfolioSynced(null);
     setShowPurchaseModal(true);
   };
 
@@ -614,6 +639,10 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                   <p className="text-foreground-muted mb-6">
                     Purchase {tokenAmount} tokens of {property.name} with Devnet SOL
                   </p>
+                  <p className="text-xs text-foreground-muted mb-4 text-left rounded-lg bg-background-secondary p-3 border border-glass-border">
+                    Paying with SOL completes your primary-offering subscription; holdings appear on your dashboard after
+                    payment (plus any SPL tokens received via the Marketplace).
+                  </p>
 
                   <div className="p-4 rounded-lg bg-purple-500/10 border border-purple-500/20 mb-4">
                     <div className="flex items-center justify-between">
@@ -656,6 +685,7 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                       onClick={() => {
                         setShowPurchaseModal(false);
                         setPurchaseError(null);
+                        setPortfolioSynced(null);
                       }}
                       disabled={isPurchasing}
                       className="btn-secondary flex-1 disabled:opacity-50"
@@ -696,6 +726,15 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                     You have successfully purchased {tokenAmount} tokens
                   </p>
 
+                  {portfolioSynced === false && (
+                    <p className="text-amber-400 text-sm mb-4 px-2">
+                      Payment succeeded, but your dashboard could not be updated (database table missing or server error).
+                      Run the SQL for{" "}
+                      <code className="text-xs">property_primary_investments</code> in Supabase, then use Refresh on the
+                      dashboard — or buy tokens on the Marketplace for on-chain SPL balance.
+                    </p>
+                  )}
+
                   {txSignature && (
                     <a
                       href={getExplorerUrl(txSignature)}
@@ -714,6 +753,7 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                         setShowPurchaseModal(false);
                         setPurchaseSuccess(false);
                         setTxSignature(null);
+                        setPortfolioSynced(null);
                       }}
                       className="btn-secondary flex-1"
                     >
