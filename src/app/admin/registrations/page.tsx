@@ -82,8 +82,56 @@ export default function AdminRegistrationsPage() {
   const [filter, setFilter] = useState<FilterTab>("pending");
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectionNotes, setRejectionNotes] = useState("");
+
+  // Calls the server-side endpoint that uses the on-chain admin keypair
+  // to register `walletToWhitelist` in the crowdfunding contract's
+  // whitelist. The browser admin (any wallet in REGISTRATION_WHITELIST)
+  // is just authorising the call; the on-chain signature comes from the
+  // server's SOLANA_ADMIN_KEYPAIR.
+  const whitelistRequesterOnChain = async (
+    walletToWhitelist: string
+  ): Promise<{ ok: boolean; message: string; signature?: string }> => {
+    if (!walletAddress) {
+      return { ok: false, message: "No admin wallet connected." };
+    }
+    try {
+      const res = await fetch("/api/crowdfunding/whitelist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          walletToWhitelist,
+          requesterAddress: walletAddress,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          ok: false,
+          message:
+            json?.error || `On-chain whitelist failed (HTTP ${res.status}).`,
+        };
+      }
+      if (json?.alreadyWhitelisted) {
+        return { ok: true, message: "Requester was already whitelisted on-chain." };
+      }
+      return {
+        ok: true,
+        message: "Requester whitelisted on-chain.",
+        signature: json?.signature,
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        message:
+          e instanceof Error
+            ? e.message
+            : "Network error while whitelisting on-chain.",
+      };
+    }
+  };
 
   useEffect(() => {
     if (connected && isAdmin) {
@@ -106,16 +154,48 @@ export default function AdminRegistrationsPage() {
 
   const handleApprove = async (id: string) => {
     if (!walletAddress) return;
+    const target = requests.find((r) => r.id === id);
     setProcessingId(id);
     setError(null);
+    setInfo(null);
+
     const res = await reviewRegistrationRequest(id, {
       action: "approve",
       adminAddress: walletAddress,
     });
     if (!res.success) {
       setError(res.error || "Failed to approve");
+      setProcessingId(null);
+      return;
+    }
+
+    // The DB is approved — now also whitelist the requester on-chain so
+    // that when they hit "Complete Tokenization" their create_campaign
+    // call doesn't fail with AccountNotInitialized on whitelist_entry.
+    if (target?.requester_address) {
+      const wlRes = await whitelistRequesterOnChain(target.requester_address);
+      if (!wlRes.ok) {
+        setError(
+          `Approved in DB, but on-chain whitelist failed: ${wlRes.message}. Use the "Whitelist on-chain" button on the Approved tab to retry.`
+        );
+      } else {
+        setInfo(wlRes.message);
+      }
+    }
+
+    await loadRequests();
+    setProcessingId(null);
+  };
+
+  const handleManualWhitelist = async (req: RegistrationRequest) => {
+    setProcessingId(req.id);
+    setError(null);
+    setInfo(null);
+    const wlRes = await whitelistRequesterOnChain(req.requester_address);
+    if (!wlRes.ok) {
+      setError(`On-chain whitelist failed: ${wlRes.message}`);
     } else {
-      await loadRequests();
+      setInfo(wlRes.message);
     }
     setProcessingId(null);
   };
@@ -274,6 +354,15 @@ export default function AdminRegistrationsPage() {
           <div className="bg-red-500/20 border border-red-500/30 rounded-xl p-4 mb-6 flex justify-between gap-3">
             <span className="text-red-300">{error}</span>
             <button onClick={() => setError(null)} className="text-red-400">
+              ✕
+            </button>
+          </div>
+        )}
+
+        {info && (
+          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 mb-6 flex justify-between gap-3">
+            <span className="text-emerald-300">{info}</span>
+            <button onClick={() => setInfo(null)} className="text-emerald-400">
               ✕
             </button>
           </div>
@@ -494,10 +583,28 @@ export default function AdminRegistrationsPage() {
                       )}
 
                       {req.status === "approved" && (
-                        <p className="text-emerald-300 text-sm">
-                          Approved on {req.reviewed_at ? formatDate(req.reviewed_at) : "—"}.
-                          Waiting for the requester to complete on-chain tokenization.
-                        </p>
+                        <div className="space-y-2">
+                          <p className="text-emerald-300 text-sm">
+                            Approved on {req.reviewed_at ? formatDate(req.reviewed_at) : "—"}.
+                            Waiting for the requester to complete on-chain tokenization.
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleManualWhitelist(req)}
+                              disabled={processingId === req.id}
+                              title="Re-run the on-chain whitelist (in case it failed during approval)"
+                              className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 rounded-lg text-xs border border-amber-500/30 inline-flex items-center gap-2 disabled:opacity-50"
+                            >
+                              {processingId === req.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <ShieldCheck className="w-3.5 h-3.5" />
+                              )}
+                              Whitelist on-chain
+                            </button>
+                          </div>
+                        </div>
                       )}
 
                       {req.status === "tokenized" && req.property_id && (
