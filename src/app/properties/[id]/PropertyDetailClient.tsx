@@ -31,8 +31,11 @@ import {
 } from "lucide-react";
 import { RegisteredProperty } from "@/lib/propertyStore";
 import { getSolBalance, getExplorerUrl, SOLANA_NETWORK } from "@/lib/solana";
-import { invest as investInCampaign } from "@/lib/crowdfundingClient";
-import { PublicKey } from "@solana/web3.js";
+import {
+  invest as investInCampaign,
+  getCampaignPDA,
+} from "@/lib/crowdfundingClient";
+import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
 
 interface PropertyDetailClientProps {
   property: RegisteredProperty;
@@ -90,6 +93,24 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
       }
 
       const creatorPubkey = new PublicKey(property.ownerAddress);
+
+      // Verify a crowdfunding campaign actually exists on-chain for this
+      // property. Legacy listings created before the crowdfunding
+      // refactor have no campaign PDA, so calling invest would fail with
+      // AccountNotInitialized inside the program.
+      const network = SOLANA_NETWORK || "devnet";
+      const rpcUrl =
+        network === "localhost"
+          ? "http://localhost:8899"
+          : clusterApiUrl(network as "devnet" | "mainnet-beta");
+      const connection = new Connection(rpcUrl, "confirmed");
+      const [campaignPda] = getCampaignPDA(property.id, creatorPubkey);
+      const campaignAccount = await connection.getAccountInfo(campaignPda);
+      if (!campaignAccount) {
+        throw new Error(
+          "This property has no active crowdfunding campaign on-chain. It was likely listed before the crowdfunding flow was enabled, so investments aren't accepted. Ask the creator to re-tokenize it through the new register flow."
+        );
+      }
 
       // Send SOL into the on-chain crowdfunding escrow. The contract records
       // the investor and the number of tokens they're entitled to claim.
@@ -515,7 +536,8 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
 
                   <button
                     onClick={handlePurchase}
-                    className="btn-primary w-full flex items-center justify-center gap-2 text-lg glow-gold"
+                    disabled={connected && !property.campaignAddress}
+                    className="btn-primary w-full flex items-center justify-center gap-2 text-lg glow-gold disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {connected ? (
                       <>
@@ -529,6 +551,15 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                       </>
                     )}
                   </button>
+
+                  {connected && !property.campaignAddress && (
+                    <div className="mt-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-200">
+                      This property was listed before the crowdfunding flow
+                      was enabled and has no on-chain campaign, so it
+                      can&apos;t accept investments. Ask the creator to
+                      re-tokenize it through the new register flow.
+                    </div>
+                  )}
                 </>
               )}
 
