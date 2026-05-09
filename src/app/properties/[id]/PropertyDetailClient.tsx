@@ -30,8 +30,9 @@ import {
   Droplets,
 } from "lucide-react";
 import { RegisteredProperty } from "@/lib/propertyStore";
-import { getSolBalance, getExplorerUrl, SOLANA_NETWORK, connection } from "@/lib/solana";
-import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { getSolBalance, getExplorerUrl, SOLANA_NETWORK } from "@/lib/solana";
+import { invest as investInCampaign } from "@/lib/crowdfundingClient";
+import { PublicKey } from "@solana/web3.js";
 
 interface PropertyDetailClientProps {
   property: RegisteredProperty;
@@ -77,72 +78,42 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
 
   const handlePurchaseWithSOL = async () => {
     if (!publicKey || !signTransaction || !property) return;
-    
+
     setIsPurchasing(true);
     setPurchaseError(null);
-    
+
     try {
-      const ownerAddress = property.ownerAddress || "DemoWa11etAddressForTestingPurposesOnly1111111";
-      
-      let ownerPubkey: PublicKey;
-      try {
-        ownerPubkey = new PublicKey(ownerAddress);
-      } catch {
-        ownerPubkey = publicKey;
+      if (!property.ownerAddress) {
+        throw new Error(
+          "This property has no on-chain creator and cannot accept investments yet."
+        );
       }
 
-      const lamports = Math.floor(totalInvestmentSOL * LAMPORTS_PER_SOL);
-      
-      const transaction = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: ownerPubkey,
-          lamports,
-        })
+      const creatorPubkey = new PublicKey(property.ownerAddress);
+
+      // Send SOL into the on-chain crowdfunding escrow. The contract records
+      // the investor and the number of tokens they're entitled to claim.
+      // Tokens are minted to the investor when they call claim_tokens after
+      // the creator finalizes the campaign.
+      const signature = await investInCampaign(
+        { publicKey, signTransaction },
+        property.id,
+        creatorPubkey,
+        totalInvestmentSOL
       );
 
-      const { blockhash } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = publicKey;
-
-      const signedTx = await signTransaction(transaction);
-      const signature = await connection.sendRawTransaction(signedTx.serialize());
-      await connection.confirmTransaction(signature, "confirmed");
-
-      let synced = false;
-      try {
-        const recordRes = await fetch("/api/properties/investments", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            propertyId: property.id,
-            buyerAddress: publicKey.toBase58(),
-            tokens: tokenAmount,
-            transactionSignature: signature,
-          }),
-        });
-        synced = recordRes.ok;
-        if (!recordRes.ok) {
-          const errBody = await recordRes.json().catch(() => ({}));
-          console.warn("Dashboard portfolio sync failed:", errBody?.error || recordRes.statusText);
-        }
-      } catch (syncErr) {
-        console.warn("Portfolio sync request failed:", syncErr);
-      }
-      setPortfolioSynced(synced);
-
+      setPortfolioSynced(true);
       setTxSignature(signature);
       setPurchaseSuccess(true);
 
       const newBalance = await getSolBalance(publicKey);
       setSolBalance(newBalance);
-      
     } catch (e: unknown) {
       console.error("Purchase error:", e);
       const errorMessage = e instanceof Error ? e.message : "Transaction failed";
       setPurchaseError(errorMessage);
     }
-    
+
     setIsPurchasing(false);
   };
 
@@ -600,7 +571,7 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                 </div>
                 <div className="flex items-center gap-2 text-sm text-foreground-muted mb-3">
                   <Clock className="w-4 h-4 text-accent" />
-                  <span>Instant token delivery</span>
+                  <span>Tokens claimable after campaign completes</span>
                 </div>
                 <div className="flex items-center gap-2 text-sm text-cyan-400">
                   <span className="text-xs px-2 py-0.5 rounded bg-cyan-500/20 border border-cyan-500/30">
@@ -640,8 +611,8 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                     Purchase {tokenAmount} tokens of {property.name} with Devnet SOL
                   </p>
                   <p className="text-xs text-foreground-muted mb-4 text-left rounded-lg bg-background-secondary p-3 border border-glass-border">
-                    Paying with SOL completes your primary-offering subscription; holdings appear on your dashboard after
-                    payment (plus any SPL tokens received via the Marketplace).
+                    Your SOL goes into the on-chain crowdfunding escrow. Once the property creator
+                    completes the campaign, you can claim your SPL tokens from the dashboard.
                   </p>
 
                   <div className="p-4 rounded-lg bg-purple-500/10 border border-purple-500/20 mb-4">
@@ -721,19 +692,12 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                   >
                     <CheckCircle2 className="w-10 h-10 text-white" />
                   </motion.div>
-                  <h3 className="text-2xl font-bold mb-2">Purchase Complete!</h3>
+                  <h3 className="text-2xl font-bold mb-2">Investment Confirmed!</h3>
                   <p className="text-foreground-muted mb-6">
-                    You have successfully purchased {tokenAmount} tokens
+                    You committed {totalInvestmentSOL.toFixed(4)} SOL for {tokenAmount} tokens.
+                    Your tokens will be claimable from your dashboard after the creator completes
+                    the crowdfunding campaign.
                   </p>
-
-                  {portfolioSynced === false && (
-                    <p className="text-amber-400 text-sm mb-4 px-2">
-                      Payment succeeded, but your dashboard could not be updated (database table missing or server error).
-                      Run the SQL for{" "}
-                      <code className="text-xs">property_primary_investments</code> in Supabase, then use Refresh on the
-                      dashboard — or buy tokens on the Marketplace for on-chain SPL balance.
-                    </p>
-                  )}
 
                   {txSignature && (
                     <a

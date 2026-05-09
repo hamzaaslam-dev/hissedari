@@ -56,6 +56,20 @@ export const MARKETPLACE_PROGRAM_ID = new PublicKey(
   "9wprAAKPfNu9MLzCWMh63F35fJZrmk49G45nsSpfmbEd"
 );
 
+// Demo SOL/USD reference rate. Property prices are stored in USD; this
+// constant is used to derive a lamports-per-token price for marketplace
+// listings and purchases. Keep in sync with PropertyDetailClient.
+export const SOL_PRICE_USD = 150;
+
+/**
+ * Convert a USD per-token price (as stored in the property record) into the
+ * lamports-per-token integer the marketplace program expects.
+ */
+export function tokenPriceUsdToLamports(tokenPriceUsd: number): number {
+  if (!Number.isFinite(tokenPriceUsd) || tokenPriceUsd <= 0) return 1;
+  return Math.max(1, Math.floor((tokenPriceUsd / SOL_PRICE_USD) * LAMPORTS_PER_SOL));
+}
+
 // Discriminators (SHA256 of "global:<instruction_name>")[0..8]
 const DISCRIMINATORS = {
   initializeMarketplace: Buffer.from([0x2f, 0x51, 0x40, 0x00, 0x60, 0x38, 0x69, 0x07]),
@@ -466,6 +480,15 @@ export async function fetchMarketplaceStats(): Promise<MarketplaceStats | null> 
     console.error("Error fetching marketplace stats:", error);
     return null;
   }
+}
+
+/**
+ * Returns the marketplace platform wallet (= marketplace authority) needed
+ * by the buyTokens instruction to receive the platform fee.
+ */
+export async function getPlatformWallet(): Promise<PublicKey | null> {
+  const stats = await fetchMarketplaceStats();
+  return stats?.authority ?? null;
 }
 
 // Utility Functions

@@ -22,9 +22,10 @@ import { useRouter } from "next/navigation";
 import {
   saveRegisteredPropertyAsync,
   createPropertyFromRegistration,
+  generatePropertyId,
 } from "@/lib/propertyStore";
 import {
-  tokenizeProperty,
+  tokenizePropertyForCrowdfunding,
   getSolBalance,
   getExplorerUrl,
   formatAddress,
@@ -60,7 +61,8 @@ export default function CompleteRegistrationPage({ params }: PageProps) {
     propertyId: string;
     mintAddress: string;
     mintSignature: string;
-    tokenSignature: string;
+    campaign: string;
+    campaignSignature: string;
   } | null>(null);
 
   useEffect(() => {
@@ -123,10 +125,24 @@ export default function CompleteRegistrationPage({ params }: PageProps) {
     setError(null);
 
     try {
-      const tokenResult = await tokenizeProperty(
+      const propertyValueUsd = req.property_value / 278;
+
+      const fundingDeadline = new Date();
+      fundingDeadline.setDate(fundingDeadline.getDate() + req.funding_deadline_days);
+
+      // Use the same ID for both the on-chain campaign seed and the DB row.
+      const propertyId = generatePropertyId();
+
+      const tokenResult = await tokenizePropertyForCrowdfunding(
         { publicKey, signTransaction },
-        req.property_value,
-        req.total_tokens
+        {
+          propertyId,
+          propertyValueUsd,
+          totalTokens: req.total_tokens,
+          fundingDeadline,
+          platformEquityPercent: req.platform_equity_percent,
+          distributionFrequencyDays: 30,
+        }
       );
 
       const property = createPropertyFromRegistration(
@@ -154,9 +170,11 @@ export default function CompleteRegistrationPage({ params }: PageProps) {
         },
         {
           mintAddress: tokenResult.mintAddress,
-          tokenAccount: tokenResult.tokenAccount,
+          tokenAccount: "",
           ownerAddress: publicKey.toBase58(),
-          transactionSignature: tokenResult.mintSignature,
+          transactionSignature: tokenResult.campaignSignature,
+          campaignAddress: tokenResult.campaign,
+          propertyId,
         }
       );
 
@@ -182,11 +200,20 @@ export default function CompleteRegistrationPage({ params }: PageProps) {
         propertyId: property.id,
         mintAddress: tokenResult.mintAddress,
         mintSignature: tokenResult.mintSignature,
-        tokenSignature: tokenResult.tokenSignature,
+        campaign: tokenResult.campaign,
+        campaignSignature: tokenResult.campaignSignature,
       });
     } catch (e: unknown) {
       console.error("Complete tokenization error:", e);
-      setError(e instanceof Error ? e.message : "Unknown error");
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      // The on-chain crowdfunding contract requires the campaign creator
+      // (the requester completing this page) to be on the crowdfunding
+      // whitelist. If they're not, the create_campaign instruction fails;
+      // surface a clear hint so the admin can whitelist them.
+      const hint = /NotWhitelisted|whitelist|0x1771|0x1[7-8][0-9a-fA-F]{2}/.test(msg)
+        ? " — the on-chain crowdfunding program requires your wallet to be whitelisted by the platform admin before you can create a campaign. Ask the admin to add you."
+        : "";
+      setError(msg + hint);
     }
 
     setProcessing(false);
@@ -423,6 +450,18 @@ export default function CompleteRegistrationPage({ params }: PageProps) {
                     className="text-cyan-300 font-mono inline-flex items-center gap-1"
                   >
                     {formatAddress(result.mintSignature)}{" "}
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Campaign</span>
+                  <a
+                    href={getExplorerUrl(result.campaign, "address")}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-purple-300 font-mono inline-flex items-center gap-1"
+                  >
+                    {formatAddress(result.campaign)}{" "}
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>

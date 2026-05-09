@@ -6,7 +6,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import Link from "next/link";
 import {
-  tokenizeProperty,
+  tokenizePropertyForCrowdfunding,
   getSolBalance,
   getExplorerUrl,
   formatAddress,
@@ -15,6 +15,7 @@ import {
 import {
   saveRegisteredPropertyAsync,
   createPropertyFromRegistration,
+  generatePropertyId,
 } from "@/lib/propertyStore";
 import { FileUpload } from "@/components/FileUpload";
 import {
@@ -124,9 +125,9 @@ export default function RegisterPropertyPage() {
 
   const [result, setResult] = useState<{
     mintAddress: string;
-    tokenAccount: string;
     mintSignature: string;
-    tokenSignature: string;
+    campaign: string;
+    campaignSignature: string;
   } | null>(null);
 
   const [requestResult, setRequestResult] = useState<{ requestId: string } | null>(null);
@@ -242,32 +243,52 @@ export default function RegisterPropertyPage() {
     setError(null);
 
     try {
-      const tokenResult = await tokenizeProperty(
+      // Convert PKR property value -> USD for the on-chain price calculation.
+      // (1 USD ~ 278 PKR, matching the rest of the app.)
+      const propertyValueUsd = propertyData.propertyValue / 278;
+
+      const fundingDeadline = new Date();
+      fundingDeadline.setDate(
+        fundingDeadline.getDate() + tokenData.fundingDeadlineDays
+      );
+
+      // Generate the property ID up-front so the same ID is used both as
+      // the on-chain `propertyId` seed for the campaign PDA and as the row
+      // ID in the database — that way we can look the campaign up later.
+      const propertyId = generatePropertyId();
+
+      const tokenResult = await tokenizePropertyForCrowdfunding(
         { publicKey, signTransaction },
-        propertyData.propertyValue,
-        tokenData.totalTokens
+        {
+          propertyId,
+          propertyValueUsd,
+          totalTokens: tokenData.totalTokens,
+          fundingDeadline,
+          platformEquityPercent: tokenData.platformEquityPercent,
+          distributionFrequencyDays: 30,
+        }
       );
 
       setResult({
         mintAddress: tokenResult.mintAddress,
-        tokenAccount: tokenResult.tokenAccount,
         mintSignature: tokenResult.mintSignature,
-        tokenSignature: tokenResult.tokenSignature,
+        campaign: tokenResult.campaign,
+        campaignSignature: tokenResult.campaignSignature,
       });
 
-      // Save the property to local storage
       const registeredProperty = createPropertyFromRegistration(
         propertyData,
         tokenData,
         {
           mintAddress: tokenResult.mintAddress,
-          tokenAccount: tokenResult.tokenAccount,
+          tokenAccount: "", // No owner ATA in crowdfunding flow; tokens minted to investors via claim_tokens
           ownerAddress: publicKey.toBase58(),
-          transactionSignature: tokenResult.mintSignature,
+          transactionSignature: tokenResult.campaignSignature,
+          campaignAddress: tokenResult.campaign,
+          propertyId,
         }
       );
-      
-      // Save to database
+
       const saved = await saveRegisteredPropertyAsync(registeredProperty);
       if (!saved) {
         console.warn("Failed to save property to database, but tokenization succeeded");
@@ -1140,10 +1161,23 @@ export default function RegisterPropertyPage() {
                   <div>
                     <p className="text-amber-300 font-medium">Before you proceed</p>
                     <ul className="text-amber-200/80 text-sm mt-2 space-y-1 list-disc list-inside">
-                      <li>This will create a new SPL Token on Solana {SOLANA_NETWORK}</li>
-                      <li>All tokens will be minted to your connected wallet</li>
-                      <li>You will need a small amount of SOL for transaction fees</li>
-                      <li>This is a test network - no real money involved</li>
+                      <li>
+                        This creates a new SPL Token on Solana {SOLANA_NETWORK} and an on-chain
+                        crowdfunding campaign for it.
+                      </li>
+                      <li>
+                        Tokens are <strong>not</strong> minted up front — they are minted to
+                        investors when they claim, after you complete the campaign.
+                      </li>
+                      <li>
+                        You can complete the campaign at any time from your dashboard once it has
+                        received at least one investment.
+                      </li>
+                      <li>
+                        You&apos;ll sign 4 transactions: create mint, init dividend pool, create
+                        campaign, transfer mint authority to the campaign PDA.
+                      </li>
+                      <li>This is devnet — no real money involved.</li>
                     </ul>
                   </div>
                 </div>
@@ -1196,20 +1230,28 @@ export default function RegisterPropertyPage() {
               />
               <h2 className="text-2xl font-bold text-white mb-4">Creating Your Property Token</h2>
               <p className="text-gray-400 mb-8">
-                Please confirm the transactions in your wallet...
+                Please confirm each transaction in your wallet...
               </p>
-              <div className="flex justify-center gap-8 text-sm text-gray-400">
+              <div className="flex flex-wrap justify-center gap-6 text-sm text-gray-400">
                 <div className="flex items-center gap-2">
                   <motion.div
                     animate={{ scale: [1, 1.2, 1] }}
                     transition={{ duration: 1, repeat: Infinity }}
                     className="w-2 h-2 bg-emerald-500 rounded-full"
                   />
-                  Creating Token Mint
+                  Mint
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 bg-gray-500 rounded-full" />
-                  Minting Tokens
+                  Dividend Pool
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-gray-500 rounded-full" />
+                  Campaign
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-gray-500 rounded-full" />
+                  Transfer Authority
                 </div>
               </div>
             </motion.div>
@@ -1337,13 +1379,13 @@ export default function RegisterPropertyPage() {
                     </div>
                   </div>
                   <div>
-                    <p className="text-gray-400 text-sm mb-1">Your Token Account</p>
+                    <p className="text-gray-400 text-sm mb-1">Crowdfunding Campaign</p>
                     <div className="flex items-center gap-2">
                       <code className="text-purple-400 font-mono text-sm break-all">
-                        {result.tokenAccount}
+                        {result.campaign}
                       </code>
                       <a
-                        href={getExplorerUrl(result.tokenAccount, "address")}
+                        href={getExplorerUrl(result.campaign, "address")}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-cyan-400 hover:text-cyan-300"
@@ -1371,14 +1413,14 @@ export default function RegisterPropertyPage() {
                     </span>
                   </a>
                   <a
-                    href={getExplorerUrl(result.tokenSignature)}
+                    href={getExplorerUrl(result.campaignSignature)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center justify-between p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
                   >
-                    <span className="text-gray-400">Token Minting TX</span>
+                    <span className="text-gray-400">Campaign Creation TX</span>
                     <span className="text-cyan-400 font-mono text-sm">
-                      {formatAddress(result.tokenSignature)} ↗
+                      {formatAddress(result.campaignSignature)} ↗
                     </span>
                   </a>
                 </div>

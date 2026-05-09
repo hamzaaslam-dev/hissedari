@@ -17,6 +17,8 @@ import {
   createInitializeMintInstruction,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
+  createSetAuthorityInstruction,
+  AuthorityType,
   getAssociatedTokenAddress,
 } from "@solana/spl-token";
 import {
@@ -30,6 +32,11 @@ import {
   hasClaimedDividend,
   getDividendPoolPDA,
 } from "./dividendClient";
+import {
+  createCampaign,
+  getCampaignPDA,
+  percentToBps,
+} from "./crowdfundingClient";
 
 // Use devnet by default, can override with env variable
 export const SOLANA_NETWORK = process.env.NEXT_PUBLIC_SOLANA_NETWORK || "devnet";
@@ -249,6 +256,128 @@ export async function tokenizeProperty(
     mintSignature,
     tokenSignature,
     pricePerToken,
+  };
+}
+
+// Transfer mint authority of an existing mint to a target pubkey (e.g. a PDA).
+// The current mint authority (the wallet) signs the transaction.
+export async function transferMintAuthority(
+  wallet: {
+    publicKey: PublicKey;
+    signTransaction: (tx: Transaction) => Promise<Transaction>;
+  },
+  mintAddress: PublicKey,
+  newAuthority: PublicKey
+): Promise<string> {
+  const transaction = new Transaction().add(
+    createSetAuthorityInstruction(
+      mintAddress,
+      wallet.publicKey,
+      AuthorityType.MintTokens,
+      newAuthority
+    )
+  );
+
+  const { blockhash } = await connection.getLatestBlockhash();
+  transaction.recentBlockhash = blockhash;
+  transaction.feePayer = wallet.publicKey;
+
+  const signedTx = await wallet.signTransaction(transaction);
+  const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+    skipPreflight: true,
+  });
+  const confirmation = await connection.confirmTransaction(signature, "confirmed");
+  if (confirmation.value.err) {
+    throw new Error(`Mint authority transfer failed: ${JSON.stringify(confirmation.value.err)}`);
+  }
+  return signature;
+}
+
+// Full crowdfunding-based tokenization:
+//   1. Create the property token mint (wallet = mint authority initially)
+//   2. Initialize a dividend pool for it
+//   3. Create a crowdfunding campaign (wallet = creator)
+//   4. Transfer mint authority to the campaign PDA so the program can
+//      mint tokens to investors via `claim_tokens` after the campaign is
+//      finalized.
+//
+// No tokens are minted to the owner up-front. The owner receives SOL when
+// they finalize the campaign; investors receive tokens when they claim.
+export async function tokenizePropertyForCrowdfunding(
+  wallet: {
+    publicKey: PublicKey;
+    signTransaction: (tx: Transaction) => Promise<Transaction>;
+  },
+  params: {
+    propertyId: string;
+    propertyValueUsd: number;
+    totalTokens: number;
+    fundingDeadline: Date;
+    platformEquityPercent?: number; // default 5%
+    distributionFrequencyDays?: number; // default 30
+  }
+): Promise<{
+  mintAddress: string;
+  pricePerToken: number;
+  mintSignature: string;
+  dividendPool: string;
+  dividendPoolSignature: string;
+  campaign: string;
+  campaignSignature: string;
+  authoritySignature: string;
+}> {
+  const platformEquityPercent = params.platformEquityPercent ?? 5;
+  const distributionFrequencyDays = params.distributionFrequencyDays ?? 30;
+  const SOL_PRICE_USD = 150; // used to derive a token price in SOL
+
+  const pricePerTokenUsd = params.propertyValueUsd / params.totalTokens;
+  const tokenPriceLamports = Math.max(
+    1,
+    Math.floor((pricePerTokenUsd / SOL_PRICE_USD) * LAMPORTS_PER_SOL)
+  );
+  // Total funding goal = price/token (SOL) * tokens available for sale (after platform reserve)
+  const platformTokens = Math.floor(
+    (params.totalTokens * (platformEquityPercent * 100)) / 10000
+  );
+  const tokensForSale = params.totalTokens - platformTokens;
+  const fundingGoalSol = (tokenPriceLamports * tokensForSale) / LAMPORTS_PER_SOL;
+
+  // 1. Create the mint (wallet is mint authority initially)
+  const { mintAddress, signature: mintSignature } = await createPropertyTokenMint(wallet);
+
+  // 2. Initialize dividend pool
+  const { signature: dividendPoolSignature, dividendPool } = await initializeDividendPool(
+    wallet,
+    mintAddress,
+    params.propertyId,
+    distributionFrequencyDays
+  );
+
+  // 3. Create the crowdfunding campaign
+  const { signature: campaignSignature, campaign } = await createCampaign(
+    wallet,
+    mintAddress,
+    params.propertyId,
+    fundingGoalSol,
+    platformEquityPercent,
+    params.fundingDeadline,
+    tokenPriceLamports,
+    params.totalTokens
+  );
+
+  // 4. Hand mint authority over to the campaign PDA so the program can
+  //    mint tokens for investors when they claim.
+  const authoritySignature = await transferMintAuthority(wallet, mintAddress, campaign);
+
+  return {
+    mintAddress: mintAddress.toBase58(),
+    pricePerToken: pricePerTokenUsd,
+    mintSignature,
+    dividendPool: dividendPool.toBase58(),
+    dividendPoolSignature,
+    campaign: campaign.toBase58(),
+    campaignSignature,
+    authoritySignature,
   };
 }
 

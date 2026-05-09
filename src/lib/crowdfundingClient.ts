@@ -5,7 +5,12 @@ import {
   SystemProgram,
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
+} from "@solana/spl-token";
 import { connection, SOLANA_NETWORK } from "./solana";
 
 // Program ID - Update this after deploying the contract
@@ -178,8 +183,9 @@ export async function addToWhitelistInstruction(
   const [platformConfig] = getPlatformConfigPDA();
   const [whitelistEntry] = getWhitelistEntryPDA(walletToWhitelist);
 
+  // sha256("global:add_to_whitelist")[0..8]
   const discriminator = Buffer.from([
-    0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x7a, 0x8b,
+    0x9d, 0xd3, 0x34, 0x36, 0x90, 0x51, 0x05, 0x37,
   ]);
 
   const keys = [
@@ -316,6 +322,64 @@ export async function cancelCampaignInstruction(
   const keys = [
     { pubkey: creator, isSigner: true, isWritable: true },
     { pubkey: campaign, isSigner: false, isWritable: true },
+  ];
+
+  return new Transaction().add({
+    keys,
+    programId: CROWDFUNDING_PROGRAM_ID,
+    data: discriminator,
+  });
+}
+
+export async function finalizeCampaignInstruction(
+  creator: PublicKey,
+  campaign: PublicKey,
+  platformWallet: PublicKey
+): Promise<Transaction> {
+  const [platformConfig] = getPlatformConfigPDA();
+  const [escrowVault] = getEscrowVaultPDA(campaign);
+
+  // sha256("global:finalize_campaign")[0..8]
+  const discriminator = Buffer.from([
+    0xf1, 0x4c, 0xc9, 0xdd, 0x21, 0xde, 0xdc, 0x8a,
+  ]);
+
+  const keys = [
+    { pubkey: creator, isSigner: true, isWritable: true },
+    { pubkey: platformConfig, isSigner: false, isWritable: false },
+    { pubkey: campaign, isSigner: false, isWritable: true },
+    { pubkey: escrowVault, isSigner: false, isWritable: true },
+    { pubkey: platformWallet, isSigner: false, isWritable: true },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+
+  return new Transaction().add({
+    keys,
+    programId: CROWDFUNDING_PROGRAM_ID,
+    data: discriminator,
+  });
+}
+
+export async function claimTokensInstruction(
+  investor: PublicKey,
+  campaign: PublicKey,
+  propertyMint: PublicKey,
+  investorTokenAccount: PublicKey
+): Promise<Transaction> {
+  const [investorRecord] = getInvestorRecordPDA(campaign, investor);
+
+  // sha256("global:claim_tokens")[0..8]
+  const discriminator = Buffer.from([
+    0x6c, 0xd8, 0xd2, 0xe7, 0x00, 0xd4, 0x2a, 0x40,
+  ]);
+
+  const keys = [
+    { pubkey: investor, isSigner: true, isWritable: true },
+    { pubkey: campaign, isSigner: false, isWritable: false },
+    { pubkey: propertyMint, isSigner: false, isWritable: true },
+    { pubkey: investorTokenAccount, isSigner: false, isWritable: true },
+    { pubkey: investorRecord, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
   ];
 
   return new Transaction().add({
@@ -481,6 +545,80 @@ export async function cancelCampaign(
   return signature;
 }
 
+export async function finalizeCampaign(
+  wallet: WalletAdapter,
+  propertyId: string
+): Promise<string> {
+  const [campaign] = getCampaignPDA(propertyId, wallet.publicKey);
+  const platformWallet = await fetchPlatformWallet();
+  if (!platformWallet) {
+    throw new Error("Platform config not initialized");
+  }
+
+  const transaction = await finalizeCampaignInstruction(
+    wallet.publicKey,
+    campaign,
+    platformWallet
+  );
+
+  const { blockhash } = await connection.getLatestBlockhash();
+  transaction.recentBlockhash = blockhash;
+  transaction.feePayer = wallet.publicKey;
+
+  const signedTx = await wallet.signTransaction(transaction);
+  const signature = await connection.sendRawTransaction(signedTx.serialize());
+  await connection.confirmTransaction(signature, "confirmed");
+
+  return signature;
+}
+
+export async function claimTokens(
+  wallet: WalletAdapter,
+  propertyId: string,
+  creator: PublicKey,
+  propertyMint: PublicKey
+): Promise<string> {
+  const [campaign] = getCampaignPDA(propertyId, creator);
+
+  const investorTokenAccount = await getAssociatedTokenAddress(
+    propertyMint,
+    wallet.publicKey
+  );
+
+  const transaction = new Transaction();
+
+  // Create the investor's ATA if it doesn't already exist (idempotent setup).
+  const ataInfo = await connection.getAccountInfo(investorTokenAccount);
+  if (!ataInfo) {
+    transaction.add(
+      createAssociatedTokenAccountInstruction(
+        wallet.publicKey,
+        investorTokenAccount,
+        wallet.publicKey,
+        propertyMint
+      )
+    );
+  }
+
+  const claimTx = await claimTokensInstruction(
+    wallet.publicKey,
+    campaign,
+    propertyMint,
+    investorTokenAccount
+  );
+  transaction.add(...claimTx.instructions);
+
+  const { blockhash } = await connection.getLatestBlockhash();
+  transaction.recentBlockhash = blockhash;
+  transaction.feePayer = wallet.publicKey;
+
+  const signedTx = await wallet.signTransaction(transaction);
+  const signature = await connection.sendRawTransaction(signedTx.serialize());
+  await connection.confirmTransaction(signature, "confirmed");
+
+  return signature;
+}
+
 export async function claimRefund(
   wallet: WalletAdapter,
   propertyId: string,
@@ -509,6 +647,20 @@ export async function claimRefund(
 // ============================================================================
 // Read Functions
 // ============================================================================
+
+export async function fetchPlatformWallet(): Promise<PublicKey | null> {
+  try {
+    const [platformConfig] = getPlatformConfigPDA();
+    const accountInfo = await connection.getAccountInfo(platformConfig);
+    if (!accountInfo) return null;
+    // Layout (after 8-byte discriminator):
+    //   admin: Pubkey (32 bytes)
+    //   platform_wallet: Pubkey (32 bytes)
+    return new PublicKey(accountInfo.data.slice(8 + 32, 8 + 32 + 32));
+  } catch {
+    return null;
+  }
+}
 
 export async function isWalletWhitelisted(wallet: PublicKey): Promise<boolean> {
   try {

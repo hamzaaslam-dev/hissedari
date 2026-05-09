@@ -126,9 +126,9 @@ pub mod crowdfunding {
         let campaign = &ctx.accounts.campaign;
         let clock = Clock::get()?;
         
-        // Validations
+        // Validations: investing is allowed any time the campaign is Active.
+        // The creator controls when investing closes by calling finalize_campaign.
         require!(campaign.status == CampaignStatus::Active, CrowdfundingError::CampaignNotActive);
-        require!(clock.unix_timestamp < campaign.funding_deadline, CrowdfundingError::CampaignExpired);
         require!(amount > 0, CrowdfundingError::InvalidAmount);
         require!(amount >= campaign.token_price, CrowdfundingError::AmountBelowMinimum);
         
@@ -202,21 +202,14 @@ pub mod crowdfunding {
         Ok(())
     }
 
-    /// Finalize a successful campaign (creator only, after deadline or fully funded)
+    /// Finalize a campaign (creator only). Can be called any time as long as
+    /// at least 1 lamport has been raised. After finalization investors can
+    /// claim their tokens via `claim_tokens`.
     pub fn finalize_campaign(ctx: Context<FinalizeCampaign>) -> Result<()> {
         let campaign = &ctx.accounts.campaign;
-        let clock = Clock::get()?;
         
         require!(campaign.status == CampaignStatus::Active, CrowdfundingError::CampaignNotActive);
-        
-        // Can finalize if: fully funded OR deadline passed with some funding
-        let is_fully_funded = campaign.total_raised >= campaign.funding_goal;
-        let deadline_passed = clock.unix_timestamp >= campaign.funding_deadline;
-        
-        require!(
-            is_fully_funded || (deadline_passed && campaign.total_raised > 0),
-            CrowdfundingError::CannotFinalizeYet
-        );
+        require!(campaign.total_raised > 0, CrowdfundingError::CannotFinalizeYet);
         
         // Calculate platform share
         let platform_share = (campaign.total_raised as u128)

@@ -31,6 +31,17 @@ import {
   RegistrationRequest,
 } from "@/lib/registrationRequests";
 import { isRegistrationWhitelisted } from "@/lib/registrationWhitelist";
+import {
+  fetchCampaign,
+  fetchInvestorRecord,
+  getCampaignPDA,
+  finalizeCampaign,
+  claimTokens,
+  Campaign,
+  InvestorRecord,
+  CampaignStatus,
+} from "@/lib/crowdfundingClient";
+import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 
 interface TokenHolding {
   property: RegisteredProperty;
@@ -78,8 +89,21 @@ function buildUnknownPropertyFromMint(mint: string): RegisteredProperty {
   };
 }
 
+type MyCampaignEntry = {
+  property: RegisteredProperty;
+  campaign: Campaign;
+  campaignPda: PublicKey;
+};
+
+type MyInvestmentEntry = {
+  property: RegisteredProperty;
+  campaign: Campaign;
+  campaignPda: PublicKey;
+  record: InvestorRecord;
+};
+
 export default function DashboardPage() {
-  const { connected, publicKey } = useWallet();
+  const { connected, publicKey, signTransaction } = useWallet();
   const { setVisible } = useWalletModal();
   const [activeTab, setActiveTab] = useState<"portfolio" | "income">("portfolio");
   const [copied, setCopied] = useState(false);
@@ -89,6 +113,11 @@ export default function DashboardPage() {
   const [ownedProperties, setOwnedProperties] = useState<RegisteredProperty[]>([]);
   const [myRegistrationRequests, setMyRegistrationRequests] = useState<RegistrationRequest[]>([]);
   const [cancellingRequestId, setCancellingRequestId] = useState<string | null>(null);
+  const [myCampaigns, setMyCampaigns] = useState<MyCampaignEntry[]>([]);
+  const [myInvestments, setMyInvestments] = useState<MyInvestmentEntry[]>([]);
+  const [actioningId, setActioningId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
   const isAdmin = isRegistrationWhitelisted(publicKey?.toBase58() ?? null);
 
@@ -217,10 +246,103 @@ export default function DashboardPage() {
       }
 
       setHoldings(tokenHoldings);
+
+      // Fetch crowdfunding campaign data for every known property in parallel,
+      // then partition into "campaigns I created" and "campaigns I invested in".
+      const myWallet = publicKey;
+      const campaignFetches = properties
+        .filter((p) => !!p.ownerAddress)
+        .map(async (property) => {
+          try {
+            const creator = new PublicKey(property.ownerAddress);
+            const campaign = await fetchCampaign(property.id, creator);
+            if (!campaign) return null;
+            const [campaignPda] = getCampaignPDA(property.id, creator);
+            const isCreator = campaign.creator.equals(myWallet);
+            const record = await fetchInvestorRecord(campaignPda, myWallet);
+            return { property, campaign, campaignPda, isCreator, record };
+          } catch {
+            return null;
+          }
+        });
+      const campaignResults = await Promise.all(campaignFetches);
+
+      const newMyCampaigns: MyCampaignEntry[] = [];
+      const newMyInvestments: MyInvestmentEntry[] = [];
+      for (const r of campaignResults) {
+        if (!r) continue;
+        if (r.isCreator) {
+          newMyCampaigns.push({
+            property: r.property,
+            campaign: r.campaign,
+            campaignPda: r.campaignPda,
+          });
+        }
+        if (r.record && r.record.amountInvested > 0) {
+          newMyInvestments.push({
+            property: r.property,
+            campaign: r.campaign,
+            campaignPda: r.campaignPda,
+            record: r.record,
+          });
+        }
+      }
+      setMyCampaigns(newMyCampaigns);
+      setMyInvestments(newMyInvestments);
     } catch (error) {
       console.error("Error loading portfolio:", error);
     }
     setLoading(false);
+  };
+
+  const handleFinalizeCampaign = async (entry: MyCampaignEntry) => {
+    if (!publicKey || !signTransaction) return;
+    if (
+      !confirm(
+        `Complete the crowdfunding campaign for "${entry.property.name}"? This releases the raised SOL to you and the platform, and lets investors claim their tokens. This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setActioningId(entry.property.id);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const sig = await finalizeCampaign(
+        { publicKey, signTransaction },
+        entry.property.id
+      );
+      setActionSuccess(`Campaign completed. Tx: ${sig.slice(0, 12)}…`);
+      await loadPortfolio();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to finalize campaign";
+      setActionError(msg);
+    } finally {
+      setActioningId(null);
+    }
+  };
+
+  const handleClaimTokens = async (entry: MyInvestmentEntry) => {
+    if (!publicKey || !signTransaction) return;
+    setActioningId(entry.property.id);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const mint = new PublicKey(entry.property.mintAddress);
+      const sig = await claimTokens(
+        { publicKey, signTransaction },
+        entry.property.id,
+        entry.campaign.creator,
+        mint
+      );
+      setActionSuccess(`Tokens claimed. Tx: ${sig.slice(0, 12)}…`);
+      await loadPortfolio();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to claim tokens";
+      setActionError(msg);
+    } finally {
+      setActioningId(null);
+    }
   };
 
   const copyAddress = () => {
@@ -498,6 +620,222 @@ export default function DashboardPage() {
                           {cancellingRequestId === req.id ? "Cancelling…" : "Cancel"}
                         </button>
                       )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+
+        {/* Action feedback banner */}
+        {(actionError || actionSuccess) && (
+          <div
+            className={`mb-6 p-4 rounded-xl border text-sm ${
+              actionError
+                ? "bg-red-500/10 border-red-500/30 text-red-300"
+                : "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <span className="break-all">{actionError || actionSuccess}</span>
+              <button
+                onClick={() => {
+                  setActionError(null);
+                  setActionSuccess(null);
+                }}
+                className="text-foreground-muted hover:text-foreground"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* My Crowdfunding Campaigns (as creator) */}
+        {myCampaigns.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.18 }}
+            className="glass-card p-6 mb-8"
+          >
+            <h2
+              className="text-2xl font-bold mb-4"
+              style={{ fontFamily: "'Cormorant Garamond', serif" }}
+            >
+              My <span className="text-gradient-gold">Crowdfunding Campaigns</span>
+            </h2>
+            <div className="space-y-3">
+              {myCampaigns.map((entry) => {
+                const raisedSol = entry.campaign.totalRaised / LAMPORTS_PER_SOL;
+                const goalSol = entry.campaign.fundingGoal / LAMPORTS_PER_SOL;
+                const progress = Math.min(100, (raisedSol / Math.max(goalSol, 0.0000001)) * 100);
+                const isActive = entry.campaign.status === CampaignStatus.Active;
+                const isFunded = entry.campaign.status === CampaignStatus.Funded;
+                const canFinalize = isActive && entry.campaign.totalRaised > 0;
+                return (
+                  <div
+                    key={entry.property.id}
+                    className="p-4 bg-background/30 border border-white/5 rounded-xl"
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <Link
+                            href={`/properties/${entry.property.id}`}
+                            className="font-semibold hover:text-accent transition-colors"
+                          >
+                            {entry.property.name}
+                          </Link>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded-full border ${
+                              isActive
+                                ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
+                                : isFunded
+                                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                                : "bg-red-500/10 border-red-500/30 text-red-300"
+                            }`}
+                          >
+                            {isActive
+                              ? "Active"
+                              : isFunded
+                              ? "Funded"
+                              : "Cancelled"}
+                          </span>
+                        </div>
+                        <div className="text-sm text-foreground-muted mb-2">
+                          {entry.campaign.investorCount} investor
+                          {entry.campaign.investorCount === 1 ? "" : "s"} ·{" "}
+                          {entry.campaign.tokensSold.toLocaleString()} /{" "}
+                          {entry.campaign.totalTokens.toLocaleString()} tokens sold
+                        </div>
+                        <div className="h-2 bg-background rounded-full overflow-hidden mb-1">
+                          <div
+                            className="h-full bg-gradient-to-r from-accent to-secondary"
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-xs text-foreground-muted">
+                          <span>{raisedSol.toFixed(4)} SOL raised</span>
+                          <span>Goal {goalSol.toFixed(4)} SOL</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 shrink-0">
+                        {canFinalize && (
+                          <button
+                            type="button"
+                            onClick={() => handleFinalizeCampaign(entry)}
+                            disabled={actioningId === entry.property.id}
+                            className="btn-primary text-sm px-4 py-2 disabled:opacity-50"
+                          >
+                            {actioningId === entry.property.id
+                              ? "Completing…"
+                              : "Complete Crowdfunding"}
+                          </button>
+                        )}
+                        {isActive && entry.campaign.totalRaised === 0 && (
+                          <span className="text-xs text-foreground-muted px-3 py-2">
+                            Waiting for first investor
+                          </span>
+                        )}
+                        {isFunded && (
+                          <span className="text-xs px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300">
+                            Investors can now claim tokens
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+
+        {/* My Investments (as investor) — shows pending claims and claim history */}
+        {myInvestments.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.19 }}
+            className="glass-card p-6 mb-8"
+          >
+            <h2
+              className="text-2xl font-bold mb-4"
+              style={{ fontFamily: "'Cormorant Garamond', serif" }}
+            >
+              My <span className="text-gradient-gold">Crowdfunding Investments</span>
+            </h2>
+            <div className="space-y-3">
+              {myInvestments.map((entry) => {
+                const investedSol = entry.record.amountInvested / LAMPORTS_PER_SOL;
+                const tokens = entry.record.tokensPurchased;
+                const isFunded = entry.campaign.status === CampaignStatus.Funded;
+                const isCancelled = entry.campaign.status === CampaignStatus.Cancelled;
+                const claimed = entry.record.tokensClaimed;
+                const refunded = entry.record.refunded;
+                return (
+                  <div
+                    key={entry.property.id}
+                    className="p-4 bg-background/30 border border-white/5 rounded-xl"
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <Link
+                            href={`/properties/${entry.property.id}`}
+                            className="font-semibold hover:text-accent transition-colors"
+                          >
+                            {entry.property.name}
+                          </Link>
+                          {claimed && (
+                            <span className="text-xs px-2 py-0.5 rounded-full border bg-cyan-500/10 border-cyan-500/30 text-cyan-300">
+                              Claimed
+                            </span>
+                          )}
+                          {refunded && (
+                            <span className="text-xs px-2 py-0.5 rounded-full border bg-red-500/10 border-red-500/30 text-red-300">
+                              Refunded
+                            </span>
+                          )}
+                          {!claimed && !refunded && isFunded && (
+                            <span className="text-xs px-2 py-0.5 rounded-full border bg-emerald-500/10 border-emerald-500/30 text-emerald-300">
+                              Ready to claim
+                            </span>
+                          )}
+                          {!claimed && !refunded && !isFunded && !isCancelled && (
+                            <span className="text-xs px-2 py-0.5 rounded-full border bg-amber-500/10 border-amber-500/30 text-amber-300">
+                              Pending campaign completion
+                            </span>
+                          )}
+                          {isCancelled && (
+                            <span className="text-xs px-2 py-0.5 rounded-full border bg-red-500/10 border-red-500/30 text-red-300">
+                              Campaign cancelled
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-foreground-muted">
+                          You committed {investedSol.toFixed(4)} SOL for{" "}
+                          <span className="text-foreground font-medium">
+                            {tokens.toLocaleString()} tokens
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 shrink-0">
+                        {!claimed && !refunded && isFunded && (
+                          <button
+                            type="button"
+                            onClick={() => handleClaimTokens(entry)}
+                            disabled={actioningId === entry.property.id}
+                            className="btn-primary text-sm px-4 py-2 disabled:opacity-50"
+                          >
+                            {actioningId === entry.property.id
+                              ? "Claiming…"
+                              : "Claim My Tokens"}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );

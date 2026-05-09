@@ -285,9 +285,10 @@ export function createPropertyFromRegistration(
     ownerAddress: string;
     transactionSignature: string;
     campaignAddress?: string;
+    propertyId?: string;
   }
 ): RegisteredProperty {
-  const id = generatePropertyId();
+  const id = blockchainData.propertyId ?? generatePropertyId();
   const priceUSD = Math.round(formData.propertyValue / 278);
   const platformEquityPercent = tokenData.platformEquityPercent ?? 5;
   const fundingDeadlineDays = tokenData.fundingDeadlineDays ?? 30;
