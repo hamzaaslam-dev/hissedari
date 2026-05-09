@@ -23,7 +23,12 @@ import {
   Gift,
   Sparkles,
 } from "lucide-react";
-import { getRegisteredPropertiesAsync, getPropertiesByOwnerAsync, RegisteredProperty } from "@/lib/propertyStore";
+import {
+  getRegisteredPropertiesAsync,
+  getPropertiesByOwnerAsync,
+  RegisteredProperty,
+  updatePropertyCampaignStatusAsync,
+} from "@/lib/propertyStore";
 import { connection, getSolBalance } from "@/lib/solana";
 import {
   listRegistrationRequests,
@@ -40,6 +45,7 @@ import {
   Campaign,
   InvestorRecord,
   CampaignStatus,
+  isCampaignNotActiveAnchorError,
 } from "@/lib/crowdfundingClient";
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 
@@ -314,16 +320,54 @@ export default function DashboardPage() {
     setActionError(null);
     setActionSuccess(null);
     try {
+      const creatorPk = new PublicKey(entry.property.ownerAddress);
+      const fresh = await fetchCampaign(
+        entry.property.id,
+        creatorPk,
+        entry.campaignPda
+      );
+      if (!fresh) {
+        throw new Error(
+          "Could not load this campaign on-chain. Check that the property has a valid campaign address and you are on the correct network (devnet)."
+        );
+      }
+      if (fresh.status !== CampaignStatus.Active) {
+        await loadPortfolio();
+        throw new Error(
+          fresh.status === CampaignStatus.Funded
+            ? "This campaign is already completed on-chain (status: Funded). The dashboard was refreshed — investors can use Claim My Tokens below."
+            : "This campaign is cancelled on-chain. Refresh the dashboard; it cannot be finalized again."
+        );
+      }
+      if (fresh.totalRaised <= 0) {
+        throw new Error(
+          "The program requires at least 1 lamport raised before you can finalize. Wait for an investor contribution first."
+        );
+      }
+
       const sig = await finalizeCampaign(
         { publicKey, signTransaction },
         entry.property.id,
         entry.campaignPda
       );
       setActionSuccess(`Campaign completed. Tx: ${sig.slice(0, 12)}…`);
+      void updatePropertyCampaignStatusAsync(
+        entry.property.id,
+        "funded",
+        undefined,
+        fresh.investorCount
+      );
       await loadPortfolio();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to finalize campaign";
-      setActionError(msg);
+      if (isCampaignNotActiveAnchorError(msg)) {
+        await loadPortfolio();
+        setActionError(
+          "On-chain this campaign is no longer active (usually it was already completed). The dashboard was refreshed — if it shows Funded, investors can claim tokens; if it still looks wrong, hard-refresh the page (clear cache)."
+        );
+      } else {
+        setActionError(msg);
+      }
     } finally {
       setActioningId(null);
     }

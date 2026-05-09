@@ -685,6 +685,91 @@ export async function isWalletWhitelisted(wallet: PublicKey): Promise<boolean> {
   }
 }
 
+/**
+ * Decode a `Campaign` account body (bytes after the 8-byte Anchor discriminator).
+ * Must follow Anchor's Borsh layout: variable-length `property_id` string means
+ * all fields after it are offset by `(100 + len)` — not a fixed `4 + 64` skip.
+ * A previous bug assumed a 64-byte string slot and read `status` ~36 bytes too
+ * late, so finalized campaigns still appeared Active and claim UI never showed.
+ */
+export function decodeCampaignAccountData(data: Buffer): Campaign | null {
+  try {
+    if (data.length < 100) return null;
+
+    const creator = new PublicKey(data.slice(0, 32));
+    const propertyMint = new PublicKey(data.slice(32, 64));
+    const escrowVault = new PublicKey(data.slice(64, 96));
+
+    const idLen = data.readUInt32LE(96);
+    if (idLen > 256 || 100 + idLen > data.length) return null;
+
+    const onChainPropertyId = data.slice(100, 100 + idLen).toString("utf8");
+
+    // Borsh: next field (`funding_goal: u64`) starts immediately after string bytes
+    // (no implicit padding to 64 or to 8 in Anchor's account serialization).
+    let o = 100 + idLen;
+
+    if (o + 8 + 8 + 2 + 8 + 8 + 8 + 8 + 4 + 1 + 8 + 1 + 1 > data.length) return null;
+
+    const fundingGoal = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const totalRaised = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const platformEquityBps = data.readUInt16LE(o);
+    o += 2;
+    const fundingDeadline = Number(data.readBigInt64LE(o));
+    o += 8;
+    const tokenPrice = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const totalTokens = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const tokensSold = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const investorCount = data.readUInt32LE(o);
+    o += 4;
+
+    const statusByte = data[o];
+    o += 1;
+    let status: CampaignStatus;
+    switch (statusByte) {
+      case 0:
+        status = CampaignStatus.Active;
+        break;
+      case 1:
+        status = CampaignStatus.Funded;
+        break;
+      case 2:
+        status = CampaignStatus.Cancelled;
+        break;
+      default:
+        status = CampaignStatus.Active;
+    }
+
+    const createdAt = Number(data.readBigInt64LE(o));
+    o += 8;
+    // bump, escrow_bump — not needed for UI; remainder is account padding.
+
+    return {
+      creator,
+      propertyMint,
+      escrowVault,
+      propertyId: onChainPropertyId,
+      fundingGoal,
+      totalRaised,
+      platformEquityBps,
+      fundingDeadline,
+      tokenPrice,
+      totalTokens,
+      tokensSold,
+      investorCount,
+      status,
+      createdAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchCampaign(
   propertyId: string,
   creator: PublicKey,
@@ -700,32 +785,7 @@ export async function fetchCampaign(
     }
 
     const data = accountInfo.data.slice(8);
-    
-    const statusByte = data[32 + 32 + 32 + 4 + 64 + 8 + 8 + 2 + 8 + 8 + 8 + 8 + 4];
-    let status: CampaignStatus;
-    switch (statusByte) {
-      case 0: status = CampaignStatus.Active; break;
-      case 1: status = CampaignStatus.Funded; break;
-      case 2: status = CampaignStatus.Cancelled; break;
-      default: status = CampaignStatus.Active;
-    }
-
-    return {
-      creator: new PublicKey(data.slice(0, 32)),
-      propertyMint: new PublicKey(data.slice(32, 64)),
-      escrowVault: new PublicKey(data.slice(64, 96)),
-      propertyId: data.slice(100, 100 + data.readUInt32LE(96)).toString(),
-      fundingGoal: Number(data.readBigUInt64LE(164)),
-      totalRaised: Number(data.readBigUInt64LE(172)),
-      platformEquityBps: data.readUInt16LE(180),
-      fundingDeadline: Number(data.readBigInt64LE(182)),
-      tokenPrice: Number(data.readBigUInt64LE(190)),
-      totalTokens: Number(data.readBigUInt64LE(198)),
-      tokensSold: Number(data.readBigUInt64LE(206)),
-      investorCount: data.readUInt32LE(214),
-      status,
-      createdAt: Number(data.readBigInt64LE(219)),
-    };
+    return decodeCampaignAccountData(data);
   } catch {
     return null;
   }
@@ -762,6 +822,19 @@ export async function fetchInvestorRecord(
 // ============================================================================
 // Utility Functions
 // ============================================================================
+
+/** Anchor custom error 6009 = 0x1779 for `CrowdfundingError::CampaignNotActive` */
+export const ANCHOR_CAMPAIGN_NOT_ACTIVE = 6009;
+
+export function isCampaignNotActiveAnchorError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("campaignnotactive") ||
+    m.includes("campaign is not active") ||
+    m.includes("6009") ||
+    m.includes("0x1779")
+  );
+}
 
 export function formatDeadline(timestamp: number): string {
   const date = new Date(timestamp * 1000);
