@@ -21,6 +21,7 @@ import {
   isRegistrationWhitelisted,
   REGISTRATION_WHITELIST,
 } from "@/lib/registrationWhitelist";
+import { submitRegistrationRequest } from "@/lib/registrationRequests";
 
 type Step = "details" | "tokenization" | "confirm" | "processing" | "success";
 
@@ -128,6 +129,8 @@ export default function RegisterPropertyPage() {
     tokenSignature: string;
   } | null>(null);
 
+  const [requestResult, setRequestResult] = useState<{ requestId: string } | null>(null);
+
   const [error, setError] = useState<string | null>(null);
 
   // Fetch SOL balance
@@ -176,6 +179,52 @@ export default function RegisterPropertyPage() {
     }));
   };
 
+  const handleSubmitRequest = async () => {
+    if (!publicKey) {
+      setError("Please connect your wallet first");
+      return;
+    }
+
+    setCurrentStep("processing");
+    setError(null);
+
+    try {
+      const res = await submitRegistrationRequest({
+        requesterAddress: publicKey.toBase58(),
+        name: propertyData.name,
+        location: propertyData.location,
+        city: propertyData.city,
+        description: propertyData.description,
+        propertyType: propertyData.propertyType,
+        size: propertyData.size,
+        bedrooms: propertyData.bedrooms,
+        bathrooms: propertyData.bathrooms,
+        yearBuilt: propertyData.yearBuilt,
+        features: propertyData.features,
+        propertyValue: propertyData.propertyValue,
+        totalTokens: tokenData.totalTokens,
+        pricePerToken: tokenData.pricePerToken,
+        platformEquityPercent: tokenData.platformEquityPercent,
+        fundingDeadlineDays: tokenData.fundingDeadlineDays,
+        estimatedDividendYield: tokenData.estimatedDividendYield,
+        uploadedPhotos: propertyData.photos,
+        certificates: propertyData.certificates,
+      });
+
+      if (!res.success) {
+        throw new Error(res.error || "Failed to submit request");
+      }
+
+      setRequestResult({ requestId: res.id! });
+      setCurrentStep("success");
+    } catch (e: unknown) {
+      console.error("Submit request error:", e);
+      const errorMessage = e instanceof Error ? e.message : "Unknown error occurred";
+      setError(`Could not submit registration request: ${errorMessage}`);
+      setCurrentStep("confirm");
+    }
+  };
+
   const handleTokenize = async () => {
     if (!publicKey || !signTransaction) {
       setError("Please connect your wallet first");
@@ -184,7 +233,7 @@ export default function RegisterPropertyPage() {
 
     if (!isRegistrationWhitelisted(publicKey.toBase58())) {
       setError(
-        "This wallet is not authorized to register properties. Only whitelisted wallets can tokenize new properties on this platform."
+        "This wallet is not authorized to tokenize directly. Submit a registration request and wait for admin approval."
       );
       return;
     }
@@ -351,34 +400,36 @@ export default function RegisterPropertyPage() {
           </motion.div>
         )}
 
-        {/* Access Restricted Banner */}
+        {/* Pending Approval Banner */}
         {connected && publicKey && !isAuthorized && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-gradient-to-r from-red-500/20 to-rose-500/20 border border-red-500/40 rounded-2xl p-6 mb-8"
+            className="bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/40 rounded-2xl p-6 mb-8"
           >
             <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-red-500/20 rounded-full flex items-center justify-center flex-shrink-0">
-                <span className="text-2xl">🔒</span>
+              <div className="w-12 h-12 bg-amber-500/20 rounded-full flex items-center justify-center flex-shrink-0">
+                <span className="text-2xl">📝</span>
               </div>
               <div className="flex-1">
                 <h3 className="text-white font-semibold text-lg mb-1">
-                  Property Registration Restricted
+                  Registration Requires Admin Approval
                 </h3>
                 <p className="text-gray-300 text-sm mb-3">
-                  Only whitelisted wallets can register and tokenize properties on Hissedari.
-                  Your connected wallet is not on the registration whitelist.
+                  Anyone can submit a property for tokenization, but it must be reviewed and
+                  approved by the platform admin before it appears on the marketplace. Once your
+                  request is approved you&apos;ll be able to complete the on-chain tokenization
+                  yourself from your dashboard.
                 </p>
                 <div className="bg-black/30 rounded-lg p-3 space-y-2">
                   <div>
-                    <p className="text-gray-400 text-xs">Connected Wallet</p>
+                    <p className="text-gray-400 text-xs">Your Wallet (requester)</p>
                     <p className="text-white font-mono text-sm break-all">
                       {publicKey.toBase58()}
                     </p>
                   </div>
                   <div>
-                    <p className="text-gray-400 text-xs">Authorized Wallets</p>
+                    <p className="text-gray-400 text-xs">Reviewer (admin) Wallet</p>
                     {REGISTRATION_WHITELIST.map((addr) => (
                       <p key={addr} className="text-emerald-300 font-mono text-sm break-all">
                         {addr}
@@ -386,10 +437,6 @@ export default function RegisterPropertyPage() {
                     ))}
                   </div>
                 </div>
-                <p className="text-gray-400 text-xs mt-3">
-                  Switch to an authorized wallet to continue. You can still browse the marketplace
-                  and invest in existing properties with any wallet.
-                </p>
               </div>
             </div>
           </motion.div>
@@ -1111,21 +1158,23 @@ export default function RegisterPropertyPage() {
                   ← Back
                 </button>
                 <button
-                  onClick={handleTokenize}
-                  disabled={!connected || !isAuthorized || solBalance < 0.01}
+                  onClick={isAuthorized ? handleTokenize : handleSubmitRequest}
+                  disabled={
+                    !connected || (isAuthorized && solBalance < 0.01)
+                  }
                   title={
                     !connected
                       ? "Connect your wallet first"
-                      : !isAuthorized
-                      ? "This wallet is not whitelisted to register properties"
-                      : solBalance < 0.01
-                      ? "Insufficient SOL balance"
-                      : "Tokenize this property"
+                      : isAuthorized && solBalance < 0.01
+                      ? "Insufficient SOL balance to tokenize"
+                      : isAuthorized
+                      ? "Tokenize this property"
+                      : "Submit this property for admin approval"
                   }
                   className="px-8 py-3 bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-emerald-500/25 transition-all flex items-center gap-2"
                 >
-                  <span>{isAuthorized ? "🚀" : "🔒"}</span>
-                  {isAuthorized ? "Tokenize Property" : "Not Authorized"}
+                  <span>{isAuthorized ? "🚀" : "📨"}</span>
+                  {isAuthorized ? "Tokenize Property" : "Submit for Approval"}
                 </button>
               </div>
             </motion.div>
@@ -1166,7 +1215,85 @@ export default function RegisterPropertyPage() {
             </motion.div>
           )}
 
-          {/* Success */}
+          {/* Success - registration request submitted (non-admin flow) */}
+          {currentStep === "success" && requestResult && !result && (
+            <motion.div
+              key="success-request"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8"
+            >
+              <div className="text-center mb-8">
+                <motion.div
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  transition={{ type: "spring", bounce: 0.5 }}
+                  className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-amber-400 to-orange-400 rounded-full flex items-center justify-center text-4xl"
+                >
+                  📨
+                </motion.div>
+                <h2 className="text-3xl font-bold text-white mb-2">Submitted for Approval</h2>
+                <p className="text-gray-400 max-w-xl mx-auto">
+                  Your registration request has been submitted. The platform admin will review
+                  your property details, photos, and certificates. Once approved, you can complete
+                  the on-chain tokenization from your dashboard.
+                </p>
+              </div>
+
+              <div className="bg-gradient-to-br from-amber-500/10 to-orange-500/10 border border-amber-500/20 rounded-2xl p-6 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <p className="text-gray-400 text-sm mb-1">Request ID</p>
+                    <code className="text-amber-400 font-mono text-sm break-all">
+                      {requestResult.requestId}
+                    </code>
+                  </div>
+                  <div>
+                    <p className="text-gray-400 text-sm mb-1">Status</p>
+                    <span className="inline-block px-3 py-1 bg-amber-500/20 border border-amber-500/30 rounded-full text-amber-300 text-sm font-medium">
+                      Pending admin review
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white/5 border border-white/10 rounded-xl p-4 mb-8">
+                <h3 className="text-white font-medium mb-3">What happens next?</h3>
+                <ol className="space-y-2 text-gray-300 text-sm list-decimal list-inside">
+                  <li>The admin reviews your submission and either approves or rejects it.</li>
+                  <li>
+                    If approved, your dashboard will show a &ldquo;Complete Tokenization&rdquo;
+                    button for this property.
+                  </li>
+                  <li>
+                    You sign the on-chain mint transactions yourself, so you remain the owner of
+                    all minted tokens.
+                  </li>
+                  <li>
+                    Your property then becomes visible to every wallet on the marketplace.
+                  </li>
+                </ol>
+              </div>
+
+              <div className="flex flex-col sm:flex-row justify-center gap-4">
+                <Link
+                  href="/dashboard"
+                  className="px-8 py-3 bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-bold rounded-xl hover:shadow-lg hover:shadow-emerald-500/25 transition-all text-center"
+                >
+                  Go to Dashboard
+                </Link>
+                <Link
+                  href="/properties"
+                  className="px-8 py-3 bg-white/5 border border-white/10 text-white font-bold rounded-xl hover:bg-white/10 transition-all text-center"
+                >
+                  Browse Marketplace
+                </Link>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Success - tokenized (admin flow) */}
           {currentStep === "success" && result && (
             <motion.div
               key="success"

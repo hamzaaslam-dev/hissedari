@@ -25,6 +25,11 @@ import {
 } from "lucide-react";
 import { getRegisteredPropertiesAsync, getPropertiesByOwnerAsync, RegisteredProperty } from "@/lib/propertyStore";
 import { connection, getSolBalance } from "@/lib/solana";
+import {
+  listRegistrationRequests,
+  RegistrationRequest,
+} from "@/lib/registrationRequests";
+import { isRegistrationWhitelisted } from "@/lib/registrationWhitelist";
 
 interface TokenHolding {
   property: RegisteredProperty;
@@ -81,15 +86,31 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [solBalance, setSolBalance] = useState(0);
   const [ownedProperties, setOwnedProperties] = useState<RegisteredProperty[]>([]);
+  const [myRegistrationRequests, setMyRegistrationRequests] = useState<RegistrationRequest[]>([]);
+
+  const isAdmin = isRegistrationWhitelisted(publicKey?.toBase58() ?? null);
 
   useEffect(() => {
     if (connected && publicKey) {
       loadPortfolio();
       loadSolBalance();
+      loadMyRegistrationRequests();
     } else {
       setLoading(false);
     }
   }, [connected, publicKey]);
+
+  const loadMyRegistrationRequests = async () => {
+    if (!publicKey) return;
+    try {
+      const reqs = await listRegistrationRequests({
+        requester: publicKey.toBase58(),
+      });
+      setMyRegistrationRequests(reqs);
+    } catch (e) {
+      console.error("Failed to load my registration requests:", e);
+    }
+  };
 
   const loadSolBalance = async () => {
     if (!publicKey) return;
@@ -273,6 +294,15 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex gap-3 flex-wrap">
+            {isAdmin && (
+              <Link
+                href="/admin/registrations"
+                className="btn-primary flex items-center gap-2 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Review Requests
+              </Link>
+            )}
             {ownedProperties.length > 0 && (
               <Link href="/admin/dividends" className="btn-primary flex items-center gap-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600">
                 <Banknote className="w-4 h-4" />
@@ -281,7 +311,10 @@ export default function DashboardPage() {
             )}
             <button
               type="button"
-              onClick={() => loadPortfolio()}
+              onClick={() => {
+                loadPortfolio();
+                loadMyRegistrationRequests();
+              }}
               className="btn-secondary flex items-center gap-2"
             >
               <Sparkles className="w-4 h-4" />
@@ -349,6 +382,98 @@ export default function DashboardPage() {
             <p className="text-sm text-foreground-muted mt-1">Invested in</p>
           </div>
         </motion.div>
+
+        {/* My Registration Requests */}
+        {myRegistrationRequests.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15 }}
+            className="glass-card p-6 mb-8"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2
+                className="text-2xl font-bold"
+                style={{ fontFamily: "'Cormorant Garamond', serif" }}
+              >
+                My Property <span className="text-gradient-gold">Registrations</span>
+              </h2>
+              <Link
+                href="/register"
+                className="text-sm text-accent hover:underline"
+              >
+                + Submit another
+              </Link>
+            </div>
+            <div className="space-y-3">
+              {myRegistrationRequests.map((req) => {
+                const statusStyles: Record<string, string> = {
+                  pending: "bg-amber-500/10 border-amber-500/30 text-amber-300",
+                  approved: "bg-emerald-500/10 border-emerald-500/30 text-emerald-300",
+                  rejected: "bg-red-500/10 border-red-500/30 text-red-300",
+                  tokenized: "bg-cyan-500/10 border-cyan-500/30 text-cyan-300",
+                };
+                return (
+                  <div
+                    key={req.id}
+                    className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-background/30 border border-white/5 rounded-xl"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <p className="font-semibold truncate">{req.name}</p>
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded-full border ${statusStyles[req.status]}`}
+                        >
+                          {req.status === "pending" && "Pending review"}
+                          {req.status === "approved" && "Approved"}
+                          {req.status === "rejected" && "Rejected"}
+                          {req.status === "tokenized" && "Tokenized"}
+                        </span>
+                      </div>
+                      <p className="text-sm text-foreground-muted truncate">
+                        {req.location}, {req.city} ·{" "}
+                        {req.total_tokens.toLocaleString()} tokens
+                      </p>
+                      {req.status === "rejected" && req.admin_notes && (
+                        <p className="text-xs text-red-300 mt-1">
+                          Reason: {req.admin_notes}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      {req.status === "approved" && (
+                        <Link
+                          href={`/register/complete/${req.id}`}
+                          className="btn-primary text-sm px-4 py-2 flex items-center gap-1"
+                        >
+                          Complete Tokenization
+                          <ArrowUpRight className="w-3.5 h-3.5" />
+                        </Link>
+                      )}
+                      {req.status === "tokenized" && req.property_id && (
+                        <Link
+                          href={`/properties/${req.property_id}`}
+                          className="btn-secondary text-sm px-4 py-2 flex items-center gap-1"
+                        >
+                          View Listing
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </Link>
+                      )}
+                      {(req.status === "pending" || req.status === "rejected") && (
+                        <Link
+                          href={`/register/complete/${req.id}`}
+                          className="btn-secondary text-sm px-4 py-2"
+                        >
+                          Details
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
 
         {/* Tab Navigation */}
         <motion.div

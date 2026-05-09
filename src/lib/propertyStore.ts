@@ -146,21 +146,28 @@ export function getRegisteredProperties(): RegisteredProperty[] {
 }
 
 // Save a new registered property to database
-export async function saveRegisteredPropertyAsync(property: RegisteredProperty): Promise<boolean> {
+export async function saveRegisteredPropertyAsync(
+  property: RegisteredProperty,
+  registrationRequestId?: string
+): Promise<boolean> {
   try {
     const apiUrl = getApiBase();
+    const payload: Record<string, unknown> = registeredPropertyToDb(property);
+    if (registrationRequestId) {
+      payload.registrationRequestId = registrationRequestId;
+    }
     const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(registeredPropertyToDb(property)),
+      body: JSON.stringify(payload),
     });
-    
+
     if (!response.ok) {
       throw new Error(`Failed to save property: ${response.status}`);
     }
-    
+
     return true;
   } catch (error) {
     console.error("Error saving property to database:", error);

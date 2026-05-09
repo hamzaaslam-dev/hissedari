@@ -146,3 +146,57 @@ CREATE POLICY "Public read primary investments" ON property_primary_investments
 
 CREATE POLICY "Anyone can insert primary investments" ON property_primary_investments
   FOR INSERT WITH CHECK (true);
+
+-- ----------------------------------------------------------------------------
+-- Property registration requests (anyone can submit; admin approves before
+-- the requester is allowed to tokenize and the property becomes public).
+-- Run after existing schema:
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS property_registration_requests (
+  id TEXT PRIMARY KEY,
+  requester_address TEXT NOT NULL,
+  name TEXT NOT NULL,
+  location TEXT NOT NULL,
+  city TEXT NOT NULL,
+  description TEXT,
+  property_type TEXT NOT NULL CHECK (property_type IN ('residential', 'commercial', 'industrial', 'mixed-use')),
+  size INTEGER NOT NULL,
+  bedrooms INTEGER,
+  bathrooms INTEGER,
+  year_built INTEGER,
+  features TEXT[] DEFAULT '{}',
+  property_value BIGINT NOT NULL,
+  total_tokens INTEGER NOT NULL,
+  price_per_token NUMERIC NOT NULL,
+  platform_equity_percent INTEGER DEFAULT 5,
+  funding_deadline_days INTEGER DEFAULT 30,
+  estimated_dividend_yield NUMERIC DEFAULT 8.5,
+  uploaded_photos TEXT[] DEFAULT '{}',
+  certificates TEXT[] DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'rejected', 'tokenized')),
+  admin_notes TEXT,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  property_id TEXT REFERENCES properties(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_registration_requests_requester
+  ON property_registration_requests(requester_address);
+CREATE INDEX IF NOT EXISTS idx_registration_requests_status
+  ON property_registration_requests(status);
+
+ALTER TABLE property_registration_requests ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public read registration requests" ON property_registration_requests
+  FOR SELECT USING (true);
+
+CREATE POLICY "Anyone can submit registration requests" ON property_registration_requests
+  FOR INSERT WITH CHECK (true);
+
+CREATE POLICY "Anyone can update registration requests" ON property_registration_requests
+  FOR UPDATE USING (true);
+
+CREATE POLICY "Anyone can delete registration requests" ON property_registration_requests
+  FOR DELETE USING (true);

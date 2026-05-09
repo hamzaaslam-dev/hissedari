@@ -3,9 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { Building2, Menu, X, Wallet, ChevronDown } from "lucide-react";
+import { Building2, Menu, X, Wallet, ChevronDown, ShieldCheck } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
+import { isRegistrationWhitelisted } from "@/lib/registrationWhitelist";
 
 export const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -13,12 +14,17 @@ export const Navbar = () => {
   const { connected, publicKey, disconnect } = useWallet();
   const { setVisible } = useWalletModal();
 
+  const isAdmin = isRegistrationWhitelisted(publicKey?.toBase58() ?? null);
+
   const navLinks = [
     { href: "/", label: "Home" },
     { href: "/properties", label: "Properties" },
     { href: "/marketplace", label: "Marketplace" },
     { href: "/register", label: "Register Property" },
     { href: "/dashboard", label: "Dashboard" },
+    ...(isAdmin
+      ? [{ href: "/admin/registrations", label: "Admin: Requests" }]
+      : []),
   ];
 
   const formatAddress = (address: string) => {
@@ -82,6 +88,15 @@ export const Navbar = () => {
                         >
                           My Portfolio
                         </Link>
+                        {isAdmin && (
+                          <Link
+                            href="/admin/registrations"
+                            className="flex items-center gap-2 px-4 py-3 hover:bg-white/5 transition-colors text-amber-300"
+                          >
+                            <ShieldCheck className="w-4 h-4" />
+                            Review Requests
+                          </Link>
+                        )}
                         <button
                           onClick={() => {
                             disconnect();

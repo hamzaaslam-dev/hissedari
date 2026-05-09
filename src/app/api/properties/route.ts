@@ -103,16 +103,53 @@ export async function POST(request: NextRequest) {
       uploadedPhotos,
       documents,
       timeline,
+      registrationRequestId,
     } = body;
 
-    if (!ownerAddress || !isRegistrationWhitelisted(ownerAddress)) {
-      return NextResponse.json(
-        {
-          error:
-            "Wallet not authorized to register properties. Only whitelisted wallets can tokenize new properties.",
-        },
-        { status: 403 }
-      );
+    let registrationRequestApproved = false;
+    if (registrationRequestId) {
+      const { data: reqRow, error: reqErr } = await supabase
+        .from("property_registration_requests")
+        .select("requester_address, status")
+        .eq("id", registrationRequestId)
+        .single();
+
+      if (reqErr || !reqRow) {
+        return NextResponse.json(
+          { error: "Referenced registration request not found" },
+          { status: 404 }
+        );
+      }
+      if (reqRow.status !== "approved") {
+        return NextResponse.json(
+          {
+            error: `Registration request is ${reqRow.status}; only approved requests may be tokenized.`,
+          },
+          { status: 403 }
+        );
+      }
+      if (reqRow.requester_address !== ownerAddress) {
+        return NextResponse.json(
+          {
+            error:
+              "Owner address does not match the original requester of this approved request.",
+          },
+          { status: 403 }
+        );
+      }
+      registrationRequestApproved = true;
+    }
+
+    if (!registrationRequestApproved) {
+      if (!ownerAddress || !isRegistrationWhitelisted(ownerAddress)) {
+        return NextResponse.json(
+          {
+            error:
+              "Wallet not authorized to register properties. Submit a registration request and wait for admin approval.",
+          },
+          { status: 403 }
+        );
+      }
     }
 
     // Insert property
