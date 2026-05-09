@@ -1,5 +1,5 @@
 import {
-  Connection,
+  AccountInfo,
   PublicKey,
   Transaction,
   SystemProgram,
@@ -44,6 +44,7 @@ export interface ClaimRecord {
   user: PublicKey;
   distribution: PublicKey;
   epoch: number;
+  /** SOL claimed (decoded from on-chain lamports). */
   amountClaimed: number;
   claimedAt: number;
   claimed: boolean;
@@ -388,14 +389,124 @@ export async function fetchDividendPool(
   propertyMint: PublicKey
 ): Promise<DividendPool | null> {
   const [dividendPool] = getDividendPoolPDA(propertyMint);
-  const accountInfo = await connection.getAccountInfo(dividendPool);
+  return fetchDividendPoolByAddress(dividendPool);
+}
 
+/** Load a dividend pool account by its PDA address (e.g. resolved from a distribution record). */
+export async function fetchDividendPoolByAddress(
+  dividendPoolAddress: PublicKey
+): Promise<DividendPool | null> {
+  const accountInfo = await connection.getAccountInfo(dividendPoolAddress);
   if (!accountInfo) {
     return null;
   }
-
   const data = accountInfo.data.slice(8);
   return decodeDividendPoolAccountData(data);
+}
+
+/** Anchor account body (after 8-byte discriminator) for `ClaimRecord`. */
+export function decodeClaimRecordAccountData(data: Buffer): ClaimRecord | null {
+  try {
+    if (data.length < 90) return null;
+    let o = 0;
+    const user = new PublicKey(data.slice(o, o + 32));
+    o += 32;
+    const distribution = new PublicKey(data.slice(o, o + 32));
+    o += 32;
+    const epoch = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const amountClaimedLamports = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const claimedAt = Number(data.readBigInt64LE(o));
+    o += 8;
+    const claimed = data.readUInt8(o) !== 0;
+    return {
+      user,
+      distribution,
+      epoch,
+      amountClaimed: amountClaimedLamports / LAMPORTS_PER_SOL,
+      claimedAt,
+      claimed,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchClaimRecord(
+  user: PublicKey,
+  propertyMint: PublicKey,
+  epoch: number
+): Promise<ClaimRecord | null> {
+  const [dividendPool] = getDividendPoolPDA(propertyMint);
+  const [distributionRecord] = getDistributionRecordPDA(dividendPool, epoch);
+  const [claimRecord] = getClaimRecordPDA(distributionRecord, user);
+  const accountInfo = await connection.getAccountInfo(claimRecord);
+  if (!accountInfo) return null;
+  return decodeClaimRecordAccountData(accountInfo.data.slice(8));
+}
+
+function decodeDistributionRecordData(data: Buffer): DistributionRecord | null {
+  try {
+    if (data.length < 81) return null;
+    return {
+      pool: new PublicKey(data.slice(0, 32)),
+      epoch: Number(data.readBigUInt64LE(32)),
+      totalAmount: Number(data.readBigUInt64LE(40)),
+      totalTokenSupply: Number(data.readBigUInt64LE(48)),
+      amountPerToken: Number(data.readBigUInt64LE(56)),
+      distributedAt: Number(data.readBigInt64LE(64)),
+      totalClaimed: Number(data.readBigUInt64LE(72)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export interface UserDividendMintSummary {
+  claimable: { epoch: number; claimableSol: number }[];
+  claimed: { epoch: number; amountClaimedSol: number; claimedAt: number }[];
+}
+
+/**
+ * One pass over distribution epochs for a mint: claimable rows and claimed
+ * rows (from on-chain `ClaimRecord`) for the given user.
+ */
+export async function fetchUserDividendMintSummary(
+  user: PublicKey,
+  propertyMint: PublicKey,
+  maxEpochsToScan = 64
+): Promise<UserDividendMintSummary> {
+  const claimable: { epoch: number; claimableSol: number }[] = [];
+  const claimed: { epoch: number; amountClaimedSol: number; claimedAt: number }[] = [];
+
+  const pool = await fetchDividendPool(propertyMint);
+  if (!pool || pool.currentEpoch <= 0) {
+    return { claimable, claimed };
+  }
+
+  const upper = Math.min(pool.currentEpoch, maxEpochsToScan);
+  for (let epoch = 0; epoch < upper; epoch++) {
+    const dist = await fetchDistributionRecord(propertyMint, epoch);
+    if (!dist) continue;
+    if (await hasClaimedDividend(user, propertyMint, epoch)) {
+      const cr = await fetchClaimRecord(user, propertyMint, epoch);
+      if (cr && cr.claimed) {
+        claimed.push({
+          epoch,
+          amountClaimedSol: cr.amountClaimed,
+          claimedAt: cr.claimedAt,
+        });
+      }
+      continue;
+    }
+    const sol = await getClaimableAmount(user, propertyMint, epoch);
+    if (sol > 1e-12) {
+      claimable.push({ epoch, claimableSol: sol });
+    }
+  }
+
+  return { claimable, claimed };
 }
 
 /**
@@ -408,22 +519,64 @@ export async function findClaimableDividendEpochs(
   propertyMint: PublicKey,
   maxEpochsToScan = 64
 ): Promise<{ epoch: number; claimableSol: number }[]> {
-  const pool = await fetchDividendPool(propertyMint);
-  if (!pool || pool.currentEpoch <= 0) return [];
+  const summary = await fetchUserDividendMintSummary(user, propertyMint, maxEpochsToScan);
+  return summary.claimable;
+}
 
-  const upper = Math.min(pool.currentEpoch, maxEpochsToScan);
-  const out: { epoch: number; claimableSol: number }[] = [];
+export type DividendClaimHistoryEntry = {
+  propertyMint: string;
+  epoch: number;
+  amountClaimedSol: number;
+  claimedAt: number;
+};
 
-  for (let epoch = 0; epoch < upper; epoch++) {
-    const dist = await fetchDistributionRecord(propertyMint, epoch);
-    if (!dist) continue;
-    if (await hasClaimedDividend(user, propertyMint, epoch)) continue;
-    const sol = await getClaimableAmount(user, propertyMint, epoch);
-    if (sol > 1e-12) {
-      out.push({ epoch, claimableSol: sol });
-    }
+/**
+ * All dividend claims this wallet has made on-chain (any property), including
+ * epochs for tokens you no longer hold. Uses `getProgramAccounts` with size
+ * and user memcmp matching `ClaimRecord` layout.
+ */
+export async function fetchUserDividendClaimHistory(
+  user: PublicKey
+): Promise<DividendClaimHistoryEntry[]> {
+  const CLAIM_RECORD_SPACE = 8 + 32 + 32 + 8 + 8 + 8 + 1 + 1 + 32;
+  let accounts: readonly { pubkey: PublicKey; account: AccountInfo<Buffer> }[];
+  try {
+    accounts = await connection.getProgramAccounts(DIVIDEND_PROGRAM_ID, {
+      filters: [
+        { dataSize: CLAIM_RECORD_SPACE },
+        { memcmp: { offset: 8, bytes: user.toBase58() } },
+      ],
+      commitment: "confirmed",
+    });
+  } catch (e) {
+    console.warn("getProgramAccounts dividend claims failed:", e);
+    return [];
   }
 
+  const out: DividendClaimHistoryEntry[] = [];
+
+  for (const { account } of accounts) {
+    const cr = decodeClaimRecordAccountData(account.data.slice(8));
+    if (!cr || !cr.claimed || !cr.user.equals(user)) continue;
+
+    const distInfo = await connection.getAccountInfo(cr.distribution);
+    if (!distInfo || !distInfo.owner.equals(DIVIDEND_PROGRAM_ID)) continue;
+
+    const dist = decodeDistributionRecordData(distInfo.data.slice(8));
+    if (!dist) continue;
+
+    const pool = await fetchDividendPoolByAddress(dist.pool);
+    if (!pool) continue;
+
+    out.push({
+      propertyMint: pool.propertyMint.toBase58(),
+      epoch: dist.epoch,
+      amountClaimedSol: cr.amountClaimed,
+      claimedAt: cr.claimedAt,
+    });
+  }
+
+  out.sort((a, b) => b.claimedAt - a.claimedAt);
   return out;
 }
 
@@ -441,16 +594,7 @@ export async function fetchDistributionRecord(
 
   // Skip 8-byte discriminator
   const data = accountInfo.data.slice(8);
-
-  return {
-    pool: new PublicKey(data.slice(0, 32)),
-    epoch: Number(data.readBigUInt64LE(32)),
-    totalAmount: Number(data.readBigUInt64LE(40)),
-    totalTokenSupply: Number(data.readBigUInt64LE(48)),
-    amountPerToken: Number(data.readBigUInt64LE(56)),
-    distributedAt: Number(data.readBigInt64LE(64)),
-    totalClaimed: Number(data.readBigUInt64LE(72)),
-  };
+  return decodeDistributionRecordData(data);
 }
 
 export async function getClaimableAmount(

@@ -22,6 +22,7 @@ import {
   Banknote,
   Gift,
   Sparkles,
+  History,
 } from "lucide-react";
 import {
   getRegisteredPropertiesAsync,
@@ -49,7 +50,8 @@ import {
 } from "@/lib/crowdfundingClient";
 import {
   claimDividend,
-  findClaimableDividendEpochs,
+  fetchUserDividendMintSummary,
+  fetchUserDividendClaimHistory,
   getExplorerUrl,
 } from "@/lib/dividendClient";
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
@@ -121,6 +123,15 @@ type DividendClaimRow = {
   claimableSol: number;
 };
 
+type DividendHistoryRow = {
+  id: string;
+  propertyName: string;
+  mint: string;
+  epoch: number;
+  amountClaimedSol: number;
+  claimedAt: number;
+};
+
 export default function DashboardPage() {
   const { connected, publicKey, signTransaction } = useWallet();
   const { setVisible } = useWalletModal();
@@ -139,6 +150,7 @@ export default function DashboardPage() {
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [lastActionTxSignature, setLastActionTxSignature] = useState<string | null>(null);
   const [dividendClaimRows, setDividendClaimRows] = useState<DividendClaimRow[]>([]);
+  const [dividendHistoryRows, setDividendHistoryRows] = useState<DividendHistoryRow[]>([]);
 
   const isAdmin = isRegistrationWhitelisted(publicKey?.toBase58() ?? null);
 
@@ -150,6 +162,7 @@ export default function DashboardPage() {
     } else {
       setLoading(false);
       setDividendClaimRows([]);
+      setDividendHistoryRows([]);
     }
   }, [connected, publicKey]);
 
@@ -328,13 +341,13 @@ export default function DashboardPage() {
       await Promise.all(
         [...mintSet].map(async (mintStr) => {
           try {
-            const epochs = await findClaimableDividendEpochs(
+            const summary = await fetchUserDividendMintSummary(
               publicKey,
               new PublicKey(mintStr)
             );
             const propName =
               propertiesByMint.get(mintStr)?.name ?? "Property token";
-            for (const { epoch, claimableSol } of epochs) {
+            for (const { epoch, claimableSol } of summary.claimable) {
               divRows.push({
                 id: `div:${mintStr}:${epoch}`,
                 propertyName: propName,
@@ -353,9 +366,27 @@ export default function DashboardPage() {
         return c !== 0 ? c : a.epoch - b.epoch;
       });
       setDividendClaimRows(divRows);
+
+      let historyRows: DividendHistoryRow[] = [];
+      try {
+        const chainHistory = await fetchUserDividendClaimHistory(publicKey);
+        historyRows = chainHistory.map((h) => ({
+          id: `hist:${h.propertyMint}:${h.epoch}:${h.claimedAt}`,
+          propertyName:
+            propertiesByMint.get(h.propertyMint)?.name ?? "Property token",
+          mint: h.propertyMint,
+          epoch: h.epoch,
+          amountClaimedSol: h.amountClaimedSol,
+          claimedAt: h.claimedAt,
+        }));
+      } catch (e) {
+        console.warn("Dividend claim history load failed:", e);
+      }
+      setDividendHistoryRows(historyRows);
     } catch (error) {
       console.error("Error loading portfolio:", error);
       setDividendClaimRows([]);
+      setDividendHistoryRows([]);
     }
     setLoading(false);
   };
@@ -1241,6 +1272,72 @@ export default function DashboardPage() {
                                 >
                                   {actioningId === row.id ? "Claiming…" : "Claim"}
                                 </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* On-chain dividend claim history */}
+                <div className="glass-card p-6 border-glass-border">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+                    <div>
+                      <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <History className="w-5 h-5 text-accent" />
+                        Dividend claim history
+                      </h3>
+                      <p className="text-sm text-foreground-muted mt-1">
+                        SOL you have already claimed on-chain (includes past properties
+                        even if you sold the tokens). Estimated USD yields above use
+                        listing data, not this ledger.
+                      </p>
+                    </div>
+                    {dividendHistoryRows.length > 0 && (
+                      <div className="text-right shrink-0">
+                        <p className="text-xs text-foreground-muted">Total claimed (on-chain)</p>
+                        <p className="text-lg font-bold text-secondary tabular-nums">
+                          {dividendHistoryRows
+                            .reduce((acc, r) => acc + r.amountClaimedSol, 0)
+                            .toFixed(6)}{" "}
+                          SOL
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  {dividendHistoryRows.length === 0 ? (
+                    <p className="text-sm text-foreground-muted py-2">
+                      No on-chain dividend claims yet. After you claim from the table
+                      above, they appear here with date and amount.
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b border-glass-border text-left text-sm text-foreground-muted">
+                            <th className="pb-3 font-medium">Date</th>
+                            <th className="pb-3 font-medium">Property</th>
+                            <th className="pb-3 font-medium text-center">Epoch</th>
+                            <th className="pb-3 font-medium text-right">Claimed</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-glass-border">
+                          {dividendHistoryRows.map((row) => (
+                            <tr key={row.id} className="hover:bg-white/5 transition-colors">
+                              <td className="py-3 text-sm text-foreground-muted whitespace-nowrap">
+                                {row.claimedAt > 0
+                                  ? new Date(row.claimedAt * 1000).toLocaleString(undefined, {
+                                      dateStyle: "medium",
+                                      timeStyle: "short",
+                                    })
+                                  : "—"}
+                              </td>
+                              <td className="py-3 font-medium">{row.propertyName}</td>
+                              <td className="py-3 text-center tabular-nums">{row.epoch}</td>
+                              <td className="py-3 text-right font-medium text-secondary tabular-nums">
+                                {row.amountClaimedSol.toFixed(6)} SOL
                               </td>
                             </tr>
                           ))}
