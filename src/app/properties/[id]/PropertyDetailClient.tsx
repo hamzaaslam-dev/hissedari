@@ -95,16 +95,19 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
       const creatorPubkey = new PublicKey(property.ownerAddress);
 
       // Verify a crowdfunding campaign actually exists on-chain for this
-      // property. Legacy listings created before the crowdfunding
-      // refactor have no campaign PDA, so calling invest would fail with
-      // AccountNotInitialized inside the program.
+      // property. Always prefer the campaignAddress stored in the DB
+      // (that's the real on-chain PDA), falling back to deriving from
+      // propertyId + creator only for properties created in the older
+      // flow where the API didn't preserve the client id.
       const network = SOLANA_NETWORK || "devnet";
       const rpcUrl =
         network === "localhost"
           ? "http://localhost:8899"
           : clusterApiUrl(network as "devnet" | "mainnet-beta");
       const connection = new Connection(rpcUrl, "confirmed");
-      const [campaignPda] = getCampaignPDA(property.id, creatorPubkey);
+      const campaignPda = property.campaignAddress
+        ? new PublicKey(property.campaignAddress)
+        : getCampaignPDA(property.id, creatorPubkey)[0];
       const campaignAccount = await connection.getAccountInfo(campaignPda);
       if (!campaignAccount) {
         throw new Error(
@@ -120,7 +123,8 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
         { publicKey, signTransaction },
         property.id,
         creatorPubkey,
-        totalInvestmentSOL
+        totalInvestmentSOL,
+        campaignPda
       );
 
       setPortfolioSynced(true);

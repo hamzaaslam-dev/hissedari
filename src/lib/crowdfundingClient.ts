@@ -494,9 +494,13 @@ export async function invest(
   wallet: WalletAdapter,
   propertyId: string,
   creator: PublicKey,
-  amountSol: number
+  amountSol: number,
+  // Optional precomputed campaign PDA. Use when the on-chain seed differs
+  // from the DB property id (e.g. legacy rows where the API generated a
+  // new id after tokenization succeeded).
+  campaignOverride?: PublicKey
 ): Promise<string> {
-  const [campaign] = getCampaignPDA(propertyId, creator);
+  const campaign = campaignOverride ?? getCampaignPDA(propertyId, creator)[0];
   const amountLamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
   
   const transaction = await investInstruction(
@@ -520,9 +524,11 @@ export async function invest(
 
 export async function cancelCampaign(
   wallet: WalletAdapter,
-  propertyId: string
+  propertyId: string,
+  campaignOverride?: PublicKey
 ): Promise<string> {
-  const [campaign] = getCampaignPDA(propertyId, wallet.publicKey);
+  const campaign =
+    campaignOverride ?? getCampaignPDA(propertyId, wallet.publicKey)[0];
   
   const transaction = await cancelCampaignInstruction(
     wallet.publicKey,
@@ -543,9 +549,11 @@ export async function cancelCampaign(
 
 export async function finalizeCampaign(
   wallet: WalletAdapter,
-  propertyId: string
+  propertyId: string,
+  campaignOverride?: PublicKey
 ): Promise<string> {
-  const [campaign] = getCampaignPDA(propertyId, wallet.publicKey);
+  const campaign =
+    campaignOverride ?? getCampaignPDA(propertyId, wallet.publicKey)[0];
   const platformWallet = await fetchPlatformWallet();
   if (!platformWallet) {
     throw new Error("Platform config not initialized");
@@ -572,9 +580,10 @@ export async function claimTokens(
   wallet: WalletAdapter,
   propertyId: string,
   creator: PublicKey,
-  propertyMint: PublicKey
+  propertyMint: PublicKey,
+  campaignOverride?: PublicKey
 ): Promise<string> {
-  const [campaign] = getCampaignPDA(propertyId, creator);
+  const campaign = campaignOverride ?? getCampaignPDA(propertyId, creator)[0];
 
   const investorTokenAccount = await getAssociatedTokenAddress(
     propertyMint,
@@ -618,9 +627,10 @@ export async function claimTokens(
 export async function claimRefund(
   wallet: WalletAdapter,
   propertyId: string,
-  creator: PublicKey
+  creator: PublicKey,
+  campaignOverride?: PublicKey
 ): Promise<string> {
-  const [campaign] = getCampaignPDA(propertyId, creator);
+  const campaign = campaignOverride ?? getCampaignPDA(propertyId, creator)[0];
   
   const transaction = await claimRefundInstruction(
     wallet.publicKey,
@@ -677,10 +687,12 @@ export async function isWalletWhitelisted(wallet: PublicKey): Promise<boolean> {
 
 export async function fetchCampaign(
   propertyId: string,
-  creator: PublicKey
+  creator: PublicKey,
+  campaignOverride?: PublicKey
 ): Promise<Campaign | null> {
   try {
-    const [campaign] = getCampaignPDA(propertyId, creator);
+    const campaign =
+      campaignOverride ?? getCampaignPDA(propertyId, creator)[0];
     const accountInfo = await connection.getAccountInfo(campaign);
 
     if (!accountInfo) {

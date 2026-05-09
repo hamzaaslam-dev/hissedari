@@ -65,7 +65,15 @@ export async function POST(request: NextRequest) {
   try {
     const supabase = getSupabase();
     const body = await request.json();
-    const id = generateId();
+    // Honour a client-provided id when given. The crowdfunding contract
+    // derives its campaign PDA from this id, so dropping it here would
+    // make the on-chain PDA un-derivable from the DB row (causing
+    // AccountNotInitialized on subsequent invest/claim/finalize calls).
+    const clientId =
+      typeof body.id === "string" && body.id.trim().length > 0
+        ? body.id.trim()
+        : null;
+    const id = clientId ?? generateId();
 
     const {
       name,

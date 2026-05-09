@@ -255,9 +255,15 @@ export default function DashboardPage() {
         .map(async (property) => {
           try {
             const creator = new PublicKey(property.ownerAddress);
-            const campaign = await fetchCampaign(property.id, creator);
+            // Prefer the on-chain campaign PDA stored in the DB (the
+            // authoritative one). For very old rows where it's missing
+            // we fall back to PDA derivation, which only works when the
+            // DB id matches the seed used during create_campaign.
+            const campaignPda = property.campaignAddress
+              ? new PublicKey(property.campaignAddress)
+              : getCampaignPDA(property.id, creator)[0];
+            const campaign = await fetchCampaign(property.id, creator, campaignPda);
             if (!campaign) return null;
-            const [campaignPda] = getCampaignPDA(property.id, creator);
             const isCreator = campaign.creator.equals(myWallet);
             const record = await fetchInvestorRecord(campaignPda, myWallet);
             return { property, campaign, campaignPda, isCreator, record };
@@ -310,7 +316,8 @@ export default function DashboardPage() {
     try {
       const sig = await finalizeCampaign(
         { publicKey, signTransaction },
-        entry.property.id
+        entry.property.id,
+        entry.campaignPda
       );
       setActionSuccess(`Campaign completed. Tx: ${sig.slice(0, 12)}…`);
       await loadPortfolio();
@@ -333,7 +340,8 @@ export default function DashboardPage() {
         { publicKey, signTransaction },
         entry.property.id,
         entry.campaign.creator,
-        mint
+        mint,
+        entry.campaignPda
       );
       setActionSuccess(`Tokens claimed. Tx: ${sig.slice(0, 12)}…`);
       await loadPortfolio();
