@@ -47,6 +47,11 @@ import {
   CampaignStatus,
   isCampaignNotActiveAnchorError,
 } from "@/lib/crowdfundingClient";
+import {
+  claimDividend,
+  findClaimableDividendEpochs,
+  getExplorerUrl,
+} from "@/lib/dividendClient";
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 
 interface TokenHolding {
@@ -108,6 +113,14 @@ type MyInvestmentEntry = {
   record: InvestorRecord;
 };
 
+type DividendClaimRow = {
+  id: string;
+  propertyName: string;
+  mint: string;
+  epoch: number;
+  claimableSol: number;
+};
+
 export default function DashboardPage() {
   const { connected, publicKey, signTransaction } = useWallet();
   const { setVisible } = useWalletModal();
@@ -124,6 +137,8 @@ export default function DashboardPage() {
   const [actioningId, setActioningId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [lastActionTxSignature, setLastActionTxSignature] = useState<string | null>(null);
+  const [dividendClaimRows, setDividendClaimRows] = useState<DividendClaimRow[]>([]);
 
   const isAdmin = isRegistrationWhitelisted(publicKey?.toBase58() ?? null);
 
@@ -134,6 +149,7 @@ export default function DashboardPage() {
       loadMyRegistrationRequests();
     } else {
       setLoading(false);
+      setDividendClaimRows([]);
     }
   }, [connected, publicKey]);
 
@@ -301,8 +317,45 @@ export default function DashboardPage() {
       }
       setMyCampaigns(newMyCampaigns);
       setMyInvestments(newMyInvestments);
+
+      const mintSet = new Set<string>();
+      for (const h of tokenHoldings) {
+        if (h.property.mintAddress && h.balance > 0) {
+          mintSet.add(h.property.mintAddress);
+        }
+      }
+      const divRows: DividendClaimRow[] = [];
+      await Promise.all(
+        [...mintSet].map(async (mintStr) => {
+          try {
+            const epochs = await findClaimableDividendEpochs(
+              publicKey,
+              new PublicKey(mintStr)
+            );
+            const propName =
+              propertiesByMint.get(mintStr)?.name ?? "Property token";
+            for (const { epoch, claimableSol } of epochs) {
+              divRows.push({
+                id: `div:${mintStr}:${epoch}`,
+                propertyName: propName,
+                mint: mintStr,
+                epoch,
+                claimableSol,
+              });
+            }
+          } catch (e) {
+            console.warn("Dividend scan failed for mint", mintStr, e);
+          }
+        })
+      );
+      divRows.sort((a, b) => {
+        const c = a.propertyName.localeCompare(b.propertyName);
+        return c !== 0 ? c : a.epoch - b.epoch;
+      });
+      setDividendClaimRows(divRows);
     } catch (error) {
       console.error("Error loading portfolio:", error);
+      setDividendClaimRows([]);
     }
     setLoading(false);
   };
@@ -319,6 +372,7 @@ export default function DashboardPage() {
     setActioningId(entry.property.id);
     setActionError(null);
     setActionSuccess(null);
+    setLastActionTxSignature(null);
     try {
       const creatorPk = new PublicKey(entry.property.ownerAddress);
       const fresh = await fetchCampaign(
@@ -378,6 +432,7 @@ export default function DashboardPage() {
     setActioningId(entry.property.id);
     setActionError(null);
     setActionSuccess(null);
+    setLastActionTxSignature(null);
     try {
       const mint = new PublicKey(entry.property.mintAddress);
       const sig = await claimTokens(
@@ -391,6 +446,32 @@ export default function DashboardPage() {
       await loadPortfolio();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to claim tokens";
+      setActionError(msg);
+    } finally {
+      setActioningId(null);
+    }
+  };
+
+  const handleClaimDividend = async (row: DividendClaimRow) => {
+    if (!publicKey || !signTransaction) return;
+    setActioningId(row.id);
+    setActionError(null);
+    setActionSuccess(null);
+    setLastActionTxSignature(null);
+    try {
+      const sig = await claimDividend(
+        { publicKey, signTransaction },
+        new PublicKey(row.mint),
+        row.epoch
+      );
+      setActionSuccess(
+        `Claimed ${row.claimableSol.toFixed(6)} SOL for epoch ${row.epoch} (${row.propertyName}).`
+      );
+      setLastActionTxSignature(sig);
+      await loadSolBalance();
+      await loadPortfolio();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to claim dividend";
       setActionError(msg);
     } finally {
       setActioningId(null);
@@ -690,11 +771,25 @@ export default function DashboardPage() {
             }`}
           >
             <div className="flex items-start justify-between gap-3">
-              <span className="break-all">{actionError || actionSuccess}</span>
+              <div className="flex flex-col gap-2 min-w-0">
+                <span className="break-all">{actionError || actionSuccess}</span>
+                {actionSuccess && lastActionTxSignature && (
+                  <a
+                    href={getExplorerUrl(lastActionTxSignature)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accent hover:underline inline-flex items-center gap-1 text-sm shrink-0"
+                  >
+                    View transaction on Explorer
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </div>
               <button
                 onClick={() => {
                   setActionError(null);
                   setActionSuccess(null);
+                  setLastActionTxSignature(null);
                 }}
                 className="text-foreground-muted hover:text-foreground"
               >
@@ -1101,6 +1196,58 @@ export default function DashboardPage() {
                       Across your portfolio
                     </p>
                   </div>
+                </div>
+
+                {/* On-chain dividend claims */}
+                <div className="glass-card p-6 border-secondary/25">
+                  <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                    <Coins className="w-5 h-5 text-secondary" />
+                    Claimable SOL (on-chain dividends)
+                  </h3>
+                  <p className="text-sm text-foreground-muted mb-4">
+                    After each distribution you can pull your share to your wallet. One
+                    transaction per property epoch.
+                  </p>
+                  {dividendClaimRows.length === 0 ? (
+                    <p className="text-sm text-foreground-muted py-2">
+                      No claimable dividend epochs right now. When a distribution is started
+                      for a token you hold, amounts appear here.
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b border-glass-border text-left text-sm text-foreground-muted">
+                            <th className="pb-3 font-medium">Property</th>
+                            <th className="pb-3 font-medium text-center">Epoch</th>
+                            <th className="pb-3 font-medium text-right">Claimable</th>
+                            <th className="pb-3 font-medium text-right w-36"> </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-glass-border">
+                          {dividendClaimRows.map((row) => (
+                            <tr key={row.id} className="hover:bg-white/5 transition-colors">
+                              <td className="py-3 font-medium">{row.propertyName}</td>
+                              <td className="py-3 text-center tabular-nums">{row.epoch}</td>
+                              <td className="py-3 text-right font-medium text-secondary tabular-nums">
+                                {row.claimableSol.toFixed(6)} SOL
+                              </td>
+                              <td className="py-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleClaimDividend(row)}
+                                  disabled={actioningId === row.id || !signTransaction}
+                                  className="btn-primary text-sm px-4 py-2 disabled:opacity-50"
+                                >
+                                  {actioningId === row.id ? "Claiming…" : "Claim"}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
 
                 {/* Income by Property */}

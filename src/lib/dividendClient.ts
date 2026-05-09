@@ -7,7 +7,6 @@ import {
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
 import { connection, SOLANA_NETWORK } from "./solana";
-import BN from "bn.js";
 import { u64LE } from "./binaryUtils";
 
 // Program ID - Update this after deploying the contract
@@ -342,6 +341,49 @@ export async function claimDividend(
 // Read Functions (Fetch Account Data)
 // ============================================================================
 
+/** Decode `DividendPool` body (after 8-byte Anchor discriminator). Uses variable-length `property_id` like on-chain Borsh. */
+export function decodeDividendPoolAccountData(data: Buffer): DividendPool | null {
+  try {
+    if (data.length < 100) return null;
+
+    const authority = new PublicKey(data.slice(0, 32));
+    const propertyMint = new PublicKey(data.slice(32, 64));
+    const dividendVault = new PublicKey(data.slice(64, 96));
+
+    const idLen = data.readUInt32LE(96);
+    if (idLen > 256 || 100 + idLen > data.length) return null;
+    const propertyId = data.slice(100, 100 + idLen).toString("utf8");
+
+    let o = 100 + idLen;
+    if (o + 8 + 8 + 8 + 8 + 8 + 1 > data.length) return null;
+
+    const totalDistributed = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const currentEpoch = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const distributionFrequencyDays = Number(data.readBigUInt64LE(o));
+    o += 8;
+    const lastDistributionTime = Number(data.readBigInt64LE(o));
+    o += 8;
+    const totalDepositedCurrentEpoch = Number(data.readBigUInt64LE(o));
+    o += 8;
+    // bump u8 — remainder is padding
+    return {
+      authority,
+      propertyMint,
+      dividendVault,
+      propertyId,
+      totalDistributed,
+      currentEpoch,
+      distributionFrequencyDays,
+      lastDistributionTime,
+      totalDepositedCurrentEpoch,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchDividendPool(
   propertyMint: PublicKey
 ): Promise<DividendPool | null> {
@@ -352,20 +394,37 @@ export async function fetchDividendPool(
     return null;
   }
 
-  // Skip 8-byte discriminator
   const data = accountInfo.data.slice(8);
-  
-  return {
-    authority: new PublicKey(data.slice(0, 32)),
-    propertyMint: new PublicKey(data.slice(32, 64)),
-    dividendVault: new PublicKey(data.slice(64, 96)),
-    propertyId: data.slice(100, 100 + data.readUInt32LE(96)).toString(),
-    totalDistributed: Number(data.readBigUInt64LE(164)),
-    currentEpoch: Number(data.readBigUInt64LE(172)),
-    distributionFrequencyDays: Number(data.readBigUInt64LE(180)),
-    lastDistributionTime: Number(data.readBigInt64LE(188)),
-    totalDepositedCurrentEpoch: Number(data.readBigUInt64LE(196)),
-  };
+  return decodeDividendPoolAccountData(data);
+}
+
+/**
+ * Epochs with a distribution record where this user has not yet claimed and
+ * `getClaimableAmount` &gt; 0. Epochs are `0 .. pool.currentEpoch - 1` after
+ * each successful `start_distribution` (pool stores the next epoch index).
+ */
+export async function findClaimableDividendEpochs(
+  user: PublicKey,
+  propertyMint: PublicKey,
+  maxEpochsToScan = 64
+): Promise<{ epoch: number; claimableSol: number }[]> {
+  const pool = await fetchDividendPool(propertyMint);
+  if (!pool || pool.currentEpoch <= 0) return [];
+
+  const upper = Math.min(pool.currentEpoch, maxEpochsToScan);
+  const out: { epoch: number; claimableSol: number }[] = [];
+
+  for (let epoch = 0; epoch < upper; epoch++) {
+    const dist = await fetchDistributionRecord(propertyMint, epoch);
+    if (!dist) continue;
+    if (await hasClaimedDividend(user, propertyMint, epoch)) continue;
+    const sol = await getClaimableAmount(user, propertyMint, epoch);
+    if (sol > 1e-12) {
+      out.push({ epoch, claimableSol: sol });
+    }
+  }
+
+  return out;
 }
 
 export async function fetchDistributionRecord(
