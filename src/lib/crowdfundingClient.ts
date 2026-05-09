@@ -495,13 +495,15 @@ export async function invest(
   propertyId: string,
   creator: PublicKey,
   amountSol: number,
-  // Optional precomputed campaign PDA. Use when the on-chain seed differs
-  // from the DB property id (e.g. legacy rows where the API generated a
-  // new id after tokenization succeeded).
-  campaignOverride?: PublicKey
+  campaignOverride?: PublicKey,
+  /** Exact lamports to transfer; when set, overrides `amountSol` (avoids float floor below on-chain token_price). */
+  lamportsOverride?: number
 ): Promise<string> {
   const campaign = campaignOverride ?? getCampaignPDA(propertyId, creator)[0];
-  const amountLamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+  const amountLamports =
+    lamportsOverride !== undefined && lamportsOverride > 0
+      ? Math.floor(lamportsOverride)
+      : Math.floor(amountSol * LAMPORTS_PER_SOL);
   
   const transaction = await investInstruction(
     wallet.publicKey,

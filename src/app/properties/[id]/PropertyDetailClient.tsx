@@ -34,8 +34,9 @@ import { getSolBalance, getExplorerUrl, SOLANA_NETWORK } from "@/lib/solana";
 import {
   invest as investInCampaign,
   getCampaignPDA,
+  fetchCampaign,
 } from "@/lib/crowdfundingClient";
-import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
+import { Connection, LAMPORTS_PER_SOL, PublicKey, clusterApiUrl } from "@solana/web3.js";
 
 interface PropertyDetailClientProps {
   property: RegisteredProperty;
@@ -79,6 +80,55 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
   const estimatedYearlyReturn = (totalInvestmentUSD * property.annualYield) / 100;
   const ownershipPercentage = (tokenAmount / property.totalTokens) * 100;
 
+  /** SOL required for `tokenAmount` at on-chain price (set after fetch in purchase handler / modal). */
+  const [onChainSolEstimate, setOnChainSolEstimate] = useState<number | null>(null);
+  const [chainQuoteLoading, setChainQuoteLoading] = useState(false);
+
+  useEffect(() => {
+    if (!property.ownerAddress || !property.campaignAddress) {
+      setOnChainSolEstimate(null);
+      setChainQuoteLoading(false);
+      return;
+    }
+    const creatorPk = new PublicKey(property.ownerAddress);
+    const campaignPda = new PublicKey(property.campaignAddress);
+
+    let cancelled = false;
+    setChainQuoteLoading(true);
+    void (async () => {
+      try {
+        const c = await fetchCampaign(property.id, creatorPk, campaignPda);
+        if (cancelled || !c) {
+          if (!cancelled) {
+            setOnChainSolEstimate(null);
+            setChainQuoteLoading(false);
+          }
+          return;
+        }
+        const lamports = c.tokenPrice * tokenAmount;
+        setOnChainSolEstimate(lamports / LAMPORTS_PER_SOL);
+      } catch {
+        if (!cancelled) setOnChainSolEstimate(null);
+      } finally {
+        if (!cancelled) setChainQuoteLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [property.id, property.ownerAddress, property.campaignAddress, tokenAmount]);
+
+  const hasOnChainCampaign = Boolean(property.campaignAddress);
+  const paySolForCheckout =
+    hasOnChainCampaign && onChainSolEstimate !== null
+      ? onChainSolEstimate
+      : totalInvestmentSOL;
+  const checkoutReady =
+    !hasOnChainCampaign || (!chainQuoteLoading && onChainSolEstimate !== null);
+
+  /** SOL actually sent in the last successful invest (for success copy). */
+  const [lastPaidSol, setLastPaidSol] = useState<number | null>(null);
+
   const handlePurchaseWithSOL = async () => {
     if (!publicKey || !signTransaction || !property) return;
 
@@ -115,6 +165,39 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
         );
       }
 
+      const campaign = await fetchCampaign(
+        property.id,
+        creatorPubkey,
+        campaignPda
+      );
+      if (!campaign) {
+        throw new Error("Could not read this campaign on-chain. Check your network (devnet).");
+      }
+
+      const lamportsToInvest = campaign.tokenPrice * tokenAmount;
+      if (lamportsToInvest < campaign.tokenPrice) {
+        throw new Error("Investment amount is below the minimum of one token on-chain.");
+      }
+
+      const platformTokens = Math.floor(
+        (campaign.totalTokens * campaign.platformEquityBps) / 10000
+      );
+      const availableOnChain =
+        campaign.totalTokens - platformTokens - campaign.tokensSold;
+      const tokensToBuy = Math.floor(lamportsToInvest / campaign.tokenPrice);
+      if (tokensToBuy > availableOnChain) {
+        throw new Error(
+          `Only ${availableOnChain.toLocaleString()} token(s) are still available in this campaign.`
+        );
+      }
+
+      const solRequired = lamportsToInvest / LAMPORTS_PER_SOL;
+      if (solBalance < solRequired) {
+        throw new Error(
+          `Need at least ${solRequired.toFixed(6)} SOL for ${tokenAmount} token(s) at the on-chain price; your balance is ${solBalance.toFixed(4)} SOL.`
+        );
+      }
+
       // Send SOL into the on-chain crowdfunding escrow. The contract records
       // the investor and the number of tokens they're entitled to claim.
       // Tokens are minted to the investor when they call claim_tokens after
@@ -124,8 +207,11 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
         property.id,
         creatorPubkey,
         totalInvestmentSOL,
-        campaignPda
+        campaignPda,
+        lamportsToInvest
       );
+
+      setLastPaidSol(lamportsToInvest / LAMPORTS_PER_SOL);
 
       setPortfolioSynced(true);
       setTxSignature(signature);
@@ -526,7 +612,16 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-foreground-muted">Total (SOL)</span>
-                      <span className="font-bold text-lg text-accent">{totalInvestmentSOL.toFixed(4)} SOL</span>
+                      <span className="font-bold text-lg text-accent">
+                        {onChainSolEstimate !== null
+                          ? `${onChainSolEstimate.toFixed(6)} SOL`
+                          : `${totalInvestmentSOL.toFixed(4)} SOL`}
+                        {onChainSolEstimate !== null && (
+                          <span className="block text-xs font-normal text-foreground-muted mt-0.5">
+                            On-chain price (≈${property.tokenPrice}/token in UI)
+                          </span>
+                        )}
+                      </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-foreground-muted">Ownership</span>
@@ -627,7 +722,12 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-            onClick={() => !isPurchasing && setShowPurchaseModal(false)}
+            onClick={() => {
+              if (!isPurchasing) {
+                setShowPurchaseModal(false);
+                setLastPaidSol(null);
+              }
+            }}
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
@@ -655,7 +755,7 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                       <span className="text-foreground-muted">Your Balance</span>
                       <span className="font-bold text-purple-400">{solBalance.toFixed(4)} SOL</span>
                     </div>
-                    {solBalance < totalInvestmentSOL && (
+                    {checkoutReady && solBalance < paySolForCheckout && (
                       <div className="mt-2 text-sm text-amber-400">
                         Insufficient balance.{" "}
                         <a href="https://faucet.solana.com/" target="_blank" rel="noopener noreferrer" className="underline">
@@ -676,7 +776,13 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                     </div>
                     <div className="border-t border-glass-border pt-3 flex items-center justify-between">
                       <span className="font-semibold">Pay with SOL</span>
-                      <span className="text-xl font-bold text-accent">{totalInvestmentSOL.toFixed(4)} SOL</span>
+                      <span className="text-xl font-bold text-accent">
+                        {!checkoutReady
+                          ? chainQuoteLoading
+                            ? "Loading quote…"
+                            : "Quote unavailable"
+                          : `${paySolForCheckout.toFixed(6)} SOL`}
+                      </span>
                     </div>
                   </div>
 
@@ -692,6 +798,7 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                         setShowPurchaseModal(false);
                         setPurchaseError(null);
                         setPortfolioSynced(null);
+                        setLastPaidSol(null);
                       }}
                       disabled={isPurchasing}
                       className="btn-secondary flex-1 disabled:opacity-50"
@@ -700,7 +807,11 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                     </button>
                     <button
                       onClick={handlePurchaseWithSOL}
-                      disabled={isPurchasing || solBalance < totalInvestmentSOL}
+                      disabled={
+                        isPurchasing ||
+                        !checkoutReady ||
+                        solBalance < paySolForCheckout
+                      }
                       className="btn-primary flex-1 disabled:opacity-50 flex items-center justify-center gap-2"
                     >
                       {isPurchasing ? (
@@ -711,7 +822,9 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                       ) : (
                         <>
                           <Coins className="w-4 h-4" />
-                          Pay {totalInvestmentSOL.toFixed(4)} SOL
+                          {checkoutReady
+                            ? `Pay ${paySolForCheckout.toFixed(6)} SOL`
+                            : "Pay with SOL"}
                         </>
                       )}
                     </button>
@@ -729,7 +842,9 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                   </motion.div>
                   <h3 className="text-2xl font-bold mb-2">Investment Confirmed!</h3>
                   <p className="text-foreground-muted mb-6">
-                    You committed {totalInvestmentSOL.toFixed(4)} SOL for {tokenAmount} tokens.
+                    You committed{" "}
+                    {(lastPaidSol ?? paySolForCheckout).toFixed(6)} SOL for {tokenAmount}{" "}
+                    tokens.
                     Your tokens will be claimable from your dashboard after the creator completes
                     the crowdfunding campaign.
                   </p>
@@ -753,6 +868,7 @@ export default function PropertyDetailClient({ property }: PropertyDetailClientP
                         setPurchaseSuccess(false);
                         setTxSignature(null);
                         setPortfolioSynced(null);
+                        setLastPaidSol(null);
                       }}
                       className="btn-secondary flex-1"
                     >
