@@ -27,6 +27,7 @@ import { getRegisteredPropertiesAsync, getPropertiesByOwnerAsync, RegisteredProp
 import { connection, getSolBalance } from "@/lib/solana";
 import {
   listRegistrationRequests,
+  deleteRegistrationRequest,
   RegistrationRequest,
 } from "@/lib/registrationRequests";
 import { isRegistrationWhitelisted } from "@/lib/registrationWhitelist";
@@ -87,6 +88,7 @@ export default function DashboardPage() {
   const [solBalance, setSolBalance] = useState(0);
   const [ownedProperties, setOwnedProperties] = useState<RegisteredProperty[]>([]);
   const [myRegistrationRequests, setMyRegistrationRequests] = useState<RegistrationRequest[]>([]);
+  const [cancellingRequestId, setCancellingRequestId] = useState<string | null>(null);
 
   const isAdmin = isRegistrationWhitelisted(publicKey?.toBase58() ?? null);
 
@@ -110,6 +112,25 @@ export default function DashboardPage() {
     } catch (e) {
       console.error("Failed to load my registration requests:", e);
     }
+  };
+
+  const handleCancelRegistrationRequest = async (id: string) => {
+    if (!publicKey) return;
+    if (
+      !confirm(
+        "Cancel this pending registration request? This cannot be undone, but you can submit a new request afterwards."
+      )
+    ) {
+      return;
+    }
+    setCancellingRequestId(id);
+    const ok = await deleteRegistrationRequest(id, publicKey.toBase58());
+    if (!ok) {
+      alert("Failed to cancel request. Make sure it is still pending.");
+    } else {
+      setMyRegistrationRequests((prev) => prev.filter((r) => r.id !== id));
+    }
+    setCancellingRequestId(null);
   };
 
   const loadSolBalance = async () => {
@@ -440,7 +461,7 @@ export default function DashboardPage() {
                         </p>
                       )}
                     </div>
-                    <div className="flex gap-2 shrink-0">
+                    <div className="flex flex-wrap gap-2 shrink-0">
                       {req.status === "approved" && (
                         <Link
                           href={`/register/complete/${req.id}`}
@@ -466,6 +487,16 @@ export default function DashboardPage() {
                         >
                           Details
                         </Link>
+                      )}
+                      {req.status === "pending" && (
+                        <button
+                          type="button"
+                          onClick={() => handleCancelRegistrationRequest(req.id)}
+                          disabled={cancellingRequestId === req.id}
+                          className="text-sm px-4 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
+                        >
+                          {cancellingRequestId === req.id ? "Cancelling…" : "Cancel"}
+                        </button>
                       )}
                     </div>
                   </div>

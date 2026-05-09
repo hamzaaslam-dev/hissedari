@@ -15,8 +15,10 @@ import {
 import {
   getRegistrationRequest,
   markRegistrationTokenized,
+  deleteRegistrationRequest,
   RegistrationRequest,
 } from "@/lib/registrationRequests";
+import { useRouter } from "next/navigation";
 import {
   saveRegisteredPropertyAsync,
   createPropertyFromRegistration,
@@ -45,12 +47,14 @@ interface PageProps {
 export default function CompleteRegistrationPage({ params }: PageProps) {
   const { id } = use(params);
   const { publicKey, signTransaction, connected } = useWallet();
+  const router = useRouter();
   const walletAddress = publicKey?.toBase58() ?? null;
 
   const [req, setReq] = useState<RegistrationRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [solBalance, setSolBalance] = useState(0);
   const [processing, setProcessing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
     propertyId: string;
@@ -74,6 +78,34 @@ export default function CompleteRegistrationPage({ params }: PageProps) {
     const data = await getRegistrationRequest(id);
     setReq(data);
     setLoading(false);
+  };
+
+  const handleCancel = async () => {
+    if (!req || !walletAddress) return;
+    if (req.requester_address !== walletAddress) {
+      setError("Only the original requester can cancel this request.");
+      return;
+    }
+    if (req.status !== "pending") {
+      setError("Only pending requests can be cancelled.");
+      return;
+    }
+    if (
+      !confirm(
+        "Cancel this pending registration request? This cannot be undone, but you can submit a new request afterwards."
+      )
+    ) {
+      return;
+    }
+    setCancelling(true);
+    setError(null);
+    const ok = await deleteRegistrationRequest(req.id, walletAddress);
+    if (!ok) {
+      setError("Failed to cancel request.");
+      setCancelling(false);
+      return;
+    }
+    router.push("/dashboard");
   };
 
   const handleComplete = async () => {
@@ -223,10 +255,22 @@ export default function CompleteRegistrationPage({ params }: PageProps) {
           {/* Status banner */}
           {req.status === "pending" && (
             <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 mb-6">
-              <p className="text-amber-300">
-                This request is still pending admin review. Once approved you&apos;ll be able to
-                complete tokenization here.
-              </p>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <p className="text-amber-300">
+                  This request is still pending admin review. Once approved you&apos;ll be able to
+                  complete tokenization here.
+                </p>
+                {connected && walletAddress === req.requester_address && (
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={cancelling}
+                    className="shrink-0 text-sm px-4 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
+                  >
+                    {cancelling ? "Cancelling…" : "Cancel Request"}
+                  </button>
+                )}
+              </div>
             </div>
           )}
           {req.status === "rejected" && (

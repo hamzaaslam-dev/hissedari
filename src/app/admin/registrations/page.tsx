@@ -25,9 +25,11 @@ import {
 import {
   listRegistrationRequests,
   reviewRegistrationRequest,
+  deleteRegistrationRequest,
   RegistrationRequest,
   RegistrationRequestStatus,
 } from "@/lib/registrationRequests";
+import { Trash2 } from "lucide-react";
 
 type FilterTab = "pending" | "approved" | "rejected" | "tokenized" | "all";
 
@@ -114,6 +116,20 @@ export default function AdminRegistrationsPage() {
       setError(res.error || "Failed to approve");
     } else {
       await loadRequests();
+    }
+    setProcessingId(null);
+  };
+
+  const handleAdminDelete = async (id: string) => {
+    if (!walletAddress) return;
+    if (!confirm("Permanently delete this registration request?")) return;
+    setProcessingId(id);
+    setError(null);
+    const ok = await deleteRegistrationRequest(id, walletAddress);
+    if (!ok) {
+      setError("Failed to delete request.");
+    } else {
+      setRequests((prev) => prev.filter((r) => r.id !== id));
     }
     setProcessingId(null);
   };
@@ -439,7 +455,7 @@ export default function AdminRegistrationsPage() {
                               </div>
                             </div>
                           ) : (
-                            <div className="flex gap-2">
+                            <div className="flex flex-wrap gap-2">
                               <button
                                 onClick={() => handleApprove(req.id)}
                                 disabled={processingId === req.id}
@@ -463,6 +479,15 @@ export default function AdminRegistrationsPage() {
                                 <XCircle className="w-4 h-4" />
                                 Reject
                               </button>
+                              <button
+                                onClick={() => handleAdminDelete(req.id)}
+                                disabled={processingId === req.id}
+                                title="Permanently delete this request"
+                                className="px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-300 rounded-lg text-sm border border-red-500/30 flex items-center gap-2"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                                Delete
+                              </button>
                             </div>
                           )}
                         </div>
@@ -482,6 +507,19 @@ export default function AdminRegistrationsPage() {
                         >
                           View live property listing <ExternalLink className="w-3.5 h-3.5" />
                         </Link>
+                      )}
+
+                      {req.status !== "pending" && req.status !== "tokenized" && (
+                        <div className="mt-3">
+                          <button
+                            onClick={() => handleAdminDelete(req.id)}
+                            disabled={processingId === req.id}
+                            className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-300 rounded-lg text-xs border border-red-500/30 inline-flex items-center gap-2"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Remove from list
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
