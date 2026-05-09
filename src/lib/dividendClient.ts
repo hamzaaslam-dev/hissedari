@@ -8,6 +8,7 @@ import {
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from "@solana/spl-token";
 import { connection, SOLANA_NETWORK } from "./solana";
 import BN from "bn.js";
+import { u64LE } from "./binaryUtils";
 
 // Program ID - Update this after deploying the contract
 export const DIVIDEND_PROGRAM_ID = new PublicKey(
@@ -76,10 +77,8 @@ export function getDistributionRecordPDA(
   dividendPool: PublicKey,
   epoch: number
 ): [PublicKey, number] {
-  const epochBuffer = Buffer.alloc(8);
-  epochBuffer.writeBigUInt64LE(BigInt(epoch));
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("distribution"), dividendPool.toBuffer(), epochBuffer],
+    [Buffer.from("distribution"), dividendPool.toBuffer(), u64LE(epoch)],
     DIVIDEND_PROGRAM_ID
   );
 }
@@ -117,8 +116,7 @@ export async function initializePoolInstruction(
   const propertyIdLenBuffer = Buffer.alloc(4);
   propertyIdLenBuffer.writeUInt32LE(propertyIdBuffer.length);
 
-  const frequencyBuffer = Buffer.alloc(8);
-  frequencyBuffer.writeBigUInt64LE(BigInt(distributionFrequencyDays));
+  const frequencyBuffer = u64LE(distributionFrequencyDays);
 
   const data = Buffer.concat([
     discriminator,
@@ -160,8 +158,7 @@ export async function depositDividendInstruction(
     0xcb, 0x0a, 0x26, 0xd2, 0x78, 0x56, 0x92, 0x57,
   ]);
 
-  const amountBuffer = Buffer.alloc(8);
-  amountBuffer.writeBigUInt64LE(BigInt(amountLamports));
+  const amountBuffer = u64LE(amountLamports);
 
   const data = Buffer.concat([discriminator, amountBuffer]);
 
@@ -225,8 +222,7 @@ export async function claimDividendInstruction(
     0x0f, 0x1d, 0xcf, 0x78, 0x99, 0xb2, 0xa4, 0x5b,
   ]);
 
-  const epochBuffer = Buffer.alloc(8);
-  epochBuffer.writeBigUInt64LE(BigInt(epoch));
+  const epochBuffer = u64LE(epoch);
 
   const data = Buffer.concat([discriminator, epochBuffer]);
 

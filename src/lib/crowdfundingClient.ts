@@ -12,6 +12,7 @@ import {
   createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
 import { connection, SOLANA_NETWORK } from "./solana";
+import { u64LE, i64LE } from "./binaryUtils";
 
 // Program ID - Update this after deploying the contract
 export const CROWDFUNDING_PROGRAM_ID = new PublicKey(
@@ -227,20 +228,16 @@ export async function createCampaignInstruction(
   const propertyIdLenBuffer = Buffer.alloc(4);
   propertyIdLenBuffer.writeUInt32LE(propertyIdBuffer.length);
 
-  const fundingGoalBuffer = Buffer.alloc(8);
-  fundingGoalBuffer.writeBigUInt64LE(BigInt(fundingGoal));
+  const fundingGoalBuffer = u64LE(fundingGoal);
 
   const platformEquityBpsBuffer = Buffer.alloc(2);
   platformEquityBpsBuffer.writeUInt16LE(platformEquityBps);
 
-  const deadlineBuffer = Buffer.alloc(8);
-  deadlineBuffer.writeBigInt64LE(BigInt(fundingDeadline));
+  const deadlineBuffer = i64LE(fundingDeadline);
 
-  const tokenPriceBuffer = Buffer.alloc(8);
-  tokenPriceBuffer.writeBigUInt64LE(BigInt(tokenPrice));
+  const tokenPriceBuffer = u64LE(tokenPrice);
 
-  const totalTokensBuffer = Buffer.alloc(8);
-  totalTokensBuffer.writeBigUInt64LE(BigInt(totalTokens));
+  const totalTokensBuffer = u64LE(totalTokens);
 
   const data = Buffer.concat([
     discriminator,
@@ -289,8 +286,7 @@ export async function investInstruction(
     0x0d, 0xf5, 0xb4, 0x67, 0xfe, 0xb6, 0x79, 0x04,
   ]);
 
-  const amountBuffer = Buffer.alloc(8);
-  amountBuffer.writeBigUInt64LE(BigInt(amountLamports));
+  const amountBuffer = u64LE(amountLamports);
 
   const data = Buffer.concat([discriminator, amountBuffer]);
 
