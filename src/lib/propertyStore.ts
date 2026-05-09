@@ -270,6 +270,7 @@ export function createPropertyFromRegistration(
     pricePerToken: number;
     platformEquityPercent?: number;
     fundingDeadlineDays?: number;
+    estimatedDividendYield?: number;
   },
   blockchainData: {
     mintAddress: string;
@@ -283,6 +284,7 @@ export function createPropertyFromRegistration(
   const priceUSD = Math.round(formData.propertyValue / 278);
   const platformEquityPercent = tokenData.platformEquityPercent ?? 5;
   const fundingDeadlineDays = tokenData.fundingDeadlineDays ?? 30;
+  const estimatedDividendYield = tokenData.estimatedDividendYield ?? 8.5;
   
   const platformTokens = Math.floor((tokenData.totalTokens * platformEquityPercent) / 100);
   const availableTokens = tokenData.totalTokens - platformTokens;
@@ -306,7 +308,7 @@ export function createPropertyFromRegistration(
     tokenPrice: Math.round(tokenData.pricePerToken / 278),
     totalTokens: tokenData.totalTokens,
     availableTokens: availableTokens,
-    annualYield: 8.5,
+    annualYield: estimatedDividendYield,
     propertyType: formData.propertyType,
     status: "funding",
     features: formData.features,
@@ -314,7 +316,7 @@ export function createPropertyFromRegistration(
     bedrooms: formData.bedrooms,
     bathrooms: formData.bathrooms,
     yearBuilt: formData.yearBuilt,
-    rentalIncome: Math.round(priceUSD * 0.005),
+    rentalIncome: Math.round((priceUSD * estimatedDividendYield) / 100 / 12),
     occupancyRate: 90,
     documents: [
       ...certificates.map((cert, i) => ({

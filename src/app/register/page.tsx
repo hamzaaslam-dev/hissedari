@@ -17,6 +17,10 @@ import {
   createPropertyFromRegistration,
 } from "@/lib/propertyStore";
 import { FileUpload } from "@/components/FileUpload";
+import {
+  isRegistrationWhitelisted,
+  REGISTRATION_WHITELIST,
+} from "@/lib/registrationWhitelist";
 
 type Step = "details" | "tokenization" | "confirm" | "processing" | "success";
 
@@ -43,6 +47,7 @@ interface TokenizationData {
   method: "tokens" | "price";
   platformEquityPercent: number;
   fundingDeadlineDays: number;
+  estimatedDividendYield: number;
 }
 
 const propertyTypes = [
@@ -87,6 +92,9 @@ export default function RegisterPropertyPage() {
   const [currentStep, setCurrentStep] = useState<Step>("details");
   const [solBalance, setSolBalance] = useState<number>(0);
 
+  const walletAddress = publicKey?.toBase58() ?? null;
+  const isAuthorized = isRegistrationWhitelisted(walletAddress);
+
   const [propertyData, setPropertyData] = useState<PropertyFormData>({
     name: "",
     location: "",
@@ -110,6 +118,7 @@ export default function RegisterPropertyPage() {
     method: "tokens",
     platformEquityPercent: 5,
     fundingDeadlineDays: 30,
+    estimatedDividendYield: 8.5,
   });
 
   const [result, setResult] = useState<{
@@ -170,6 +179,13 @@ export default function RegisterPropertyPage() {
   const handleTokenize = async () => {
     if (!publicKey || !signTransaction) {
       setError("Please connect your wallet first");
+      return;
+    }
+
+    if (!isRegistrationWhitelisted(publicKey.toBase58())) {
+      setError(
+        "This wallet is not authorized to register properties. Only whitelisted wallets can tokenize new properties on this platform."
+      );
       return;
     }
 
@@ -335,8 +351,52 @@ export default function RegisterPropertyPage() {
           </motion.div>
         )}
 
+        {/* Access Restricted Banner */}
+        {connected && publicKey && !isAuthorized && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-gradient-to-r from-red-500/20 to-rose-500/20 border border-red-500/40 rounded-2xl p-6 mb-8"
+          >
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-red-500/20 rounded-full flex items-center justify-center flex-shrink-0">
+                <span className="text-2xl">🔒</span>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-white font-semibold text-lg mb-1">
+                  Property Registration Restricted
+                </h3>
+                <p className="text-gray-300 text-sm mb-3">
+                  Only whitelisted wallets can register and tokenize properties on Hissedari.
+                  Your connected wallet is not on the registration whitelist.
+                </p>
+                <div className="bg-black/30 rounded-lg p-3 space-y-2">
+                  <div>
+                    <p className="text-gray-400 text-xs">Connected Wallet</p>
+                    <p className="text-white font-mono text-sm break-all">
+                      {publicKey.toBase58()}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400 text-xs">Authorized Wallets</p>
+                    {REGISTRATION_WHITELIST.map((addr) => (
+                      <p key={addr} className="text-emerald-300 font-mono text-sm break-all">
+                        {addr}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+                <p className="text-gray-400 text-xs mt-3">
+                  Switch to an authorized wallet to continue. You can still browse the marketplace
+                  and invest in existing properties with any wallet.
+                </p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         {/* Wallet Info Banner */}
-        {connected && publicKey && (
+        {connected && publicKey && isAuthorized && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -350,6 +410,9 @@ export default function RegisterPropertyPage() {
                 <div>
                   <p className="text-gray-400 text-sm">Connected Wallet</p>
                   <p className="text-white font-mono">{formatAddress(publicKey.toBase58())}</p>
+                  <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/30 rounded-full text-emerald-300 text-xs font-medium">
+                    <span>✓</span> Authorized to register
+                  </span>
                 </div>
               </div>
               <div className="flex items-center gap-4">
@@ -753,8 +816,8 @@ export default function RegisterPropertyPage() {
                 </div>
               </div>
 
-              {/* Platform Equity & Funding Deadline */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+              {/* Platform Equity, Deadline, Dividend Yield */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                 <div>
                   <label className="block text-gray-300 mb-2 font-medium">
                     Platform Equity (%) *
@@ -804,6 +867,32 @@ export default function RegisterPropertyPage() {
                     Investors can claim refund if goal not met by deadline
                   </p>
                 </div>
+
+                <div>
+                  <label className="block text-gray-300 mb-2 font-medium">
+                    Estimated Dividend Yield (% p.a.) *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={tokenData.estimatedDividendYield}
+                      onChange={(e) =>
+                        setTokenData({
+                          ...tokenData,
+                          estimatedDividendYield: Math.min(30, Math.max(0, Number(e.target.value))),
+                        })
+                      }
+                      min={0}
+                      max={30}
+                      step={0.1}
+                      className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">%</span>
+                  </div>
+                  <p className="text-emerald-400 text-sm mt-2">
+                    Estimated annual payout to token holders
+                  </p>
+                </div>
               </div>
 
               {/* Token Distribution Preview */}
@@ -851,6 +940,9 @@ export default function RegisterPropertyPage() {
                     </p>
                     <p className="text-amber-400 text-xs mt-1">
                       {tokenData.platformEquityPercent}% platform equity • {tokenData.fundingDeadlineDays} day funding period
+                    </p>
+                    <p className="text-emerald-400 text-xs mt-1">
+                      Estimated dividend yield: {tokenData.estimatedDividendYield}% per year
                     </p>
                     <p className="text-purple-400 text-xs mt-1">
                       Will be created on Solana {SOLANA_NETWORK}
@@ -943,6 +1035,10 @@ export default function RegisterPropertyPage() {
                         <p className="text-gray-400 text-xs">Network</p>
                         <p className="text-cyan-400 font-medium">Solana {SOLANA_NETWORK}</p>
                       </div>
+                      <div>
+                        <p className="text-gray-400 text-xs">Est. Dividend Yield</p>
+                        <p className="text-emerald-400 font-medium">{tokenData.estimatedDividendYield}% p.a.</p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1016,11 +1112,20 @@ export default function RegisterPropertyPage() {
                 </button>
                 <button
                   onClick={handleTokenize}
-                  disabled={!connected || solBalance < 0.01}
+                  disabled={!connected || !isAuthorized || solBalance < 0.01}
+                  title={
+                    !connected
+                      ? "Connect your wallet first"
+                      : !isAuthorized
+                      ? "This wallet is not whitelisted to register properties"
+                      : solBalance < 0.01
+                      ? "Insufficient SOL balance"
+                      : "Tokenize this property"
+                  }
                   className="px-8 py-3 bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-bold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-emerald-500/25 transition-all flex items-center gap-2"
                 >
-                  <span>🚀</span>
-                  Tokenize Property
+                  <span>{isAuthorized ? "🚀" : "🔒"}</span>
+                  {isAuthorized ? "Tokenize Property" : "Not Authorized"}
                 </button>
               </div>
             </motion.div>

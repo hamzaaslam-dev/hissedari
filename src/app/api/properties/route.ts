@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabase, generateId } from "@/lib/supabase";
+import { isRegistrationWhitelisted } from "@/lib/registrationWhitelist";
 
 // GET - Fetch all properties or filter by owner
 export async function GET(request: NextRequest) {
@@ -103,6 +104,16 @@ export async function POST(request: NextRequest) {
       documents,
       timeline,
     } = body;
+
+    if (!ownerAddress || !isRegistrationWhitelisted(ownerAddress)) {
+      return NextResponse.json(
+        {
+          error:
+            "Wallet not authorized to register properties. Only whitelisted wallets can tokenize new properties.",
+        },
+        { status: 403 }
+      );
+    }
 
     // Insert property
     const { error: insertError } = await supabase.from("properties").insert({
