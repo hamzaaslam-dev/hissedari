@@ -15,6 +15,7 @@ import {
   Users,
   Wallet,
   AlertCircle,
+  ExternalLink,
 } from "lucide-react";
 import { getPropertiesByOwnerAsync, RegisteredProperty } from "@/lib/propertyStore";
 import {
@@ -25,13 +26,22 @@ import {
   getDividendPoolPDA,
   DividendPool,
 } from "@/lib/dividendClient";
-import { connection, getSolBalance } from "@/lib/solana";
+import {
+  fetchCampaign,
+  getCampaignPDA,
+  CampaignStatus,
+  hasAnyInvestorClaimedTokens,
+} from "@/lib/crowdfundingClient";
+import { connection, getSolBalance, getExplorerUrl } from "@/lib/solana";
 import { getMint } from "@solana/spl-token";
 
 interface PropertyWithDividend {
   property: RegisteredProperty;
   dividendPool: DividendPool | null;
   tokenSupply: number;
+  /** Funded campaigns require ≥1 investor to have called claim_tokens before dividends */
+  dividendEligibilityOk: boolean;
+  dividendEligibilityReason?: string;
 }
 
 export default function AdminDividendsPage() {
@@ -44,6 +54,7 @@ export default function AdminDividendsPage() {
   const [processing, setProcessing] = useState(false);
   const [step, setStep] = useState<"select" | "deposit" | "distribute" | "success">("select");
   const [txSignature, setTxSignature] = useState("");
+  const [lastConfirmedTxSig, setLastConfirmedTxSig] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -85,16 +96,45 @@ export default function AdminDividendsPage() {
             // Use default
           }
           
+          let dividendEligibilityOk = true;
+          let dividendEligibilityReason: string | undefined;
+          if (property.ownerAddress) {
+            try {
+              const creator = new PublicKey(property.ownerAddress);
+              const campaignPda = property.campaignAddress
+                ? new PublicKey(property.campaignAddress)
+                : getCampaignPDA(property.id, creator)[0];
+              const campaign = await fetchCampaign(
+                property.id,
+                creator,
+                campaignPda
+              );
+              if (campaign && campaign.status === CampaignStatus.Funded) {
+                const anyClaimed = await hasAnyInvestorClaimedTokens(campaignPda);
+                if (!anyClaimed) {
+                  dividendEligibilityOk = false;
+                  dividendEligibilityReason =
+                    "At least one crowdfunding investor must claim their property tokens before you can deposit or distribute dividends.";
+                }
+              }
+            } catch {
+              /* no campaign or fetch failed — allow dividends */
+            }
+          }
+
           propertiesWithDividends.push({
             property,
             dividendPool: pool,
             tokenSupply,
+            dividendEligibilityOk,
+            dividendEligibilityReason,
           });
         } catch (err) {
           propertiesWithDividends.push({
             property,
             dividendPool: null,
             tokenSupply: property.totalTokens,
+            dividendEligibilityOk: true,
           });
         }
       }
@@ -122,6 +162,7 @@ export default function AdminDividendsPage() {
       );
       
       setTxSignature(result.signature);
+      setLastConfirmedTxSig(result.signature);
       await loadData();
       setSelectedProperty(null);
     } catch (err: any) {
@@ -144,6 +185,14 @@ export default function AdminDividendsPage() {
       setError("Insufficient SOL balance");
       return;
     }
+
+    if (!selectedProperty.dividendEligibilityOk) {
+      setError(
+        selectedProperty.dividendEligibilityReason ||
+          "Dividends are blocked until at least one investor has claimed their tokens from the funded campaign."
+      );
+      return;
+    }
     
     setProcessing(true);
     setError(null);
@@ -157,6 +206,7 @@ export default function AdminDividendsPage() {
       );
       
       setTxSignature(signature);
+      setLastConfirmedTxSig(signature);
       setStep("distribute");
       await loadData();
     } catch (err: any) {
@@ -168,6 +218,14 @@ export default function AdminDividendsPage() {
 
   const handleStartDistribution = async () => {
     if (!publicKey || !signTransaction || !selectedProperty) return;
+
+    if (!selectedProperty.dividendEligibilityOk) {
+      setError(
+        selectedProperty.dividendEligibilityReason ||
+          "Dividends are blocked until at least one investor has claimed their tokens from the funded campaign."
+      );
+      return;
+    }
     
     setProcessing(true);
     setError(null);
@@ -189,6 +247,7 @@ export default function AdminDividendsPage() {
       );
       
       setTxSignature(signature);
+      setLastConfirmedTxSig(signature);
       setStep("success");
       await loadData();
     } catch (err: any) {
@@ -204,6 +263,7 @@ export default function AdminDividendsPage() {
     setDividendAmount("");
     setError(null);
     setTxSignature("");
+    setLastConfirmedTxSig("");
   };
 
   if (!connected) {
@@ -261,6 +321,28 @@ export default function AdminDividendsPage() {
             </div>
           </div>
         </motion.div>
+
+        {lastConfirmedTxSig && step === "select" && (
+          <div className="mb-6 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-emerald-100 text-sm">Latest on-chain transaction</p>
+            <a
+              href={getExplorerUrl(lastConfirmedTxSig)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 text-emerald-300 hover:text-emerald-200 text-sm font-medium"
+            >
+              View on Solana Explorer
+              <ExternalLink className="w-4 h-4" />
+            </a>
+            <button
+              type="button"
+              onClick={() => setLastConfirmedTxSig("")}
+              className="text-gray-400 hover:text-white text-sm"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {loading ? (
           <div className="flex justify-center items-center h-64">
@@ -344,11 +426,17 @@ export default function AdminDividendsPage() {
                                 setSelectedProperty(prop);
                                 setStep("deposit");
                               }}
-                              className="bg-amber-500 hover:bg-amber-600 text-white font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+                              disabled={!prop.dividendEligibilityOk}
+                              className="bg-amber-500 hover:bg-amber-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
                             >
                               <Send className="w-4 h-4" />
                               Send Dividends
                             </button>
+                            {!prop.dividendEligibilityOk && prop.dividendEligibilityReason && (
+                              <p className="text-amber-200/90 text-xs text-right max-w-xs">
+                                {prop.dividendEligibilityReason}
+                              </p>
+                            )}
                           </>
                         ) : (
                           <button
@@ -386,6 +474,13 @@ export default function AdminDividendsPage() {
                 Total Shareholders: {selectedProperty.tokenSupply.toLocaleString()} token holders
               </p>
             </div>
+
+            {!selectedProperty.dividendEligibilityOk && (
+              <div className="bg-amber-500/15 border border-amber-500/40 rounded-lg p-4 mb-6 text-amber-100 text-sm">
+                {selectedProperty.dividendEligibilityReason ||
+                  "At least one investor must claim their tokens before depositing dividends."}
+              </div>
+            )}
             
             <div className="mb-6">
               <label className="block text-gray-400 text-sm mb-2">
@@ -447,7 +542,12 @@ export default function AdminDividendsPage() {
               </button>
               <button
                 onClick={handleDepositDividend}
-                disabled={processing || !dividendAmount || parseFloat(dividendAmount) <= 0}
+                disabled={
+                  processing ||
+                  !dividendAmount ||
+                  parseFloat(dividendAmount) <= 0 ||
+                  !selectedProperty.dividendEligibilityOk
+                }
                 className="flex-1 bg-amber-500 hover:bg-amber-600 disabled:bg-gray-600 text-white font-medium py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
               >
                 {processing ? (
@@ -477,6 +577,25 @@ export default function AdminDividendsPage() {
             <p className="text-gray-400 mb-6">
               {dividendAmount} SOL has been deposited. Now distribute it to all token holders.
             </p>
+
+            {txSignature && (
+              <a
+                href={getExplorerUrl(txSignature)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-2 text-emerald-400 hover:text-emerald-300 text-sm mb-6 w-full"
+              >
+                View deposit transaction on Explorer
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            )}
+
+            {!selectedProperty.dividendEligibilityOk && (
+              <div className="bg-amber-500/15 border border-amber-500/40 rounded-lg p-4 mb-6 text-amber-100 text-sm text-left">
+                {selectedProperty.dividendEligibilityReason ||
+                  "Investor token claims are required before distributing."}
+              </div>
+            )}
             
             {error && (
               <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-6 flex items-center justify-center gap-2">
@@ -487,7 +606,7 @@ export default function AdminDividendsPage() {
             
             <button
               onClick={handleStartDistribution}
-              disabled={processing}
+              disabled={processing || !selectedProperty.dividendEligibilityOk}
               className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 disabled:from-gray-600 disabled:to-gray-600 text-white font-bold py-4 rounded-lg transition-all flex items-center justify-center gap-2"
             >
               {processing ? (
@@ -523,12 +642,13 @@ export default function AdminDividendsPage() {
             
             {txSignature && (
               <a
-                href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
+                href={getExplorerUrl(txSignature)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 text-emerald-400 hover:text-emerald-300 mb-6"
               >
-                View Transaction ↗
+                View transaction on Solana Explorer
+                <ExternalLink className="w-4 h-4" />
               </a>
             )}
             

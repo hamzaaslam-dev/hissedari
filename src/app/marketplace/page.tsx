@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { ExternalLink } from "lucide-react";
 import {
   Listing,
   fetchAllListings,
@@ -15,6 +16,7 @@ import {
   solToLamports,
 } from "@/lib/marketplaceClient";
 import { getRegisteredPropertiesAsync, RegisteredProperty } from "@/lib/propertyStore";
+import { getExplorerUrl } from "@/lib/solana";
 
 export default function MarketplacePage() {
   const { publicKey, signTransaction, connected } = useWallet();
@@ -24,6 +26,7 @@ export default function MarketplacePage() {
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState<string | null>(null);
   const [buyAmount, setBuyAmount] = useState<Record<string, number>>({});
+  const [txNotice, setTxNotice] = useState<{ sig: string; label: string } | null>(null);
 
   useEffect(() => {
     loadData();
@@ -71,6 +74,7 @@ export default function MarketplacePage() {
     }
 
     setPurchasing(listing.address.toString());
+    setTxNotice(null);
     try {
       const signature = await buyTokens(
         { publicKey, signTransaction },
@@ -80,10 +84,11 @@ export default function MarketplacePage() {
         amount,
         listing.pricePerToken
       );
-      alert(`Purchase successful! Signature: ${signature.slice(0, 20)}...`);
+      setTxNotice({ sig: signature, label: "Purchase confirmed on-chain." });
       loadData();
     } catch (error: any) {
       console.error("Purchase error:", error);
+      setTxNotice(null);
       alert(`Purchase failed: ${error.message}`);
     }
     setPurchasing(null);
@@ -95,15 +100,17 @@ export default function MarketplacePage() {
     if (!confirm("Are you sure you want to cancel this listing?")) return;
 
     setPurchasing(listing.address.toString());
+    setTxNotice(null);
     try {
       const signature = await cancelListing(
         { publicKey, signTransaction },
         listing.tokenMint
       );
-      alert(`Listing cancelled! Signature: ${signature.slice(0, 20)}...`);
+      setTxNotice({ sig: signature, label: "Listing cancelled on-chain." });
       loadData();
     } catch (error: any) {
       console.error("Cancel error:", error);
+      setTxNotice(null);
       alert(`Cancel failed: ${error.message}`);
     }
     setPurchasing(null);
@@ -116,6 +123,27 @@ export default function MarketplacePage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 via-gray-800 to-gray-900 py-12 px-4">
       <div className="max-w-7xl mx-auto">
+        {txNotice && (
+          <div className="mb-6 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-emerald-100 text-sm">{txNotice.label}</p>
+            <a
+              href={getExplorerUrl(txNotice.sig)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 text-emerald-300 hover:text-emerald-200 text-sm font-medium"
+            >
+              Solana Explorer
+              <ExternalLink className="w-4 h-4" />
+            </a>
+            <button
+              type="button"
+              onClick={() => setTxNotice(null)}
+              className="text-gray-400 hover:text-white text-sm"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}

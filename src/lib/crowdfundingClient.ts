@@ -821,6 +821,44 @@ export async function fetchInvestorRecord(
   }
 }
 
+/** Anchor `InvestorRecord` account size (discriminator + fields + padding). */
+const INVESTOR_RECORD_ACCOUNT_SIZE = 8 + 32 + 32 + 8 + 8 + 8 + 1 + 1 + 1 + 32;
+
+/** Full account: 8-byte disc + 32-byte investor; `campaign` pubkey starts here. */
+const INVESTOR_RECORD_MEMCMP_CAMPAIGN_OFFSET = 40;
+
+/**
+ * Whether any investor has called `claim_tokens` for this campaign (on-chain
+ * `tokens_claimed` flag). Used before allowing dividend flows for funded sales.
+ */
+export async function hasAnyInvestorClaimedTokens(
+  campaign: PublicKey
+): Promise<boolean> {
+  try {
+    const accounts = await connection.getProgramAccounts(CROWDFUNDING_PROGRAM_ID, {
+      filters: [
+        { dataSize: INVESTOR_RECORD_ACCOUNT_SIZE },
+        {
+          memcmp: {
+            offset: INVESTOR_RECORD_MEMCMP_CAMPAIGN_OFFSET,
+            bytes: campaign.toBase58(),
+          },
+        },
+      ],
+      commitment: "confirmed",
+    });
+    for (const { account } of accounts) {
+      const data = account.data.slice(8);
+      if (data.length < 90) continue;
+      if (data[89] === 1) return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn("hasAnyInvestorClaimedTokens failed:", e);
+    return false;
+  }
+}
+
 // ============================================================================
 // Utility Functions
 // ============================================================================

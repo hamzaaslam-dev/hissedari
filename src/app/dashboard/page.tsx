@@ -435,7 +435,8 @@ export default function DashboardPage() {
         entry.property.id,
         entry.campaignPda
       );
-      setActionSuccess(`Campaign completed. Tx: ${sig.slice(0, 12)}…`);
+      setActionSuccess("Campaign completed on-chain.");
+      setLastActionTxSignature(sig);
       void updatePropertyCampaignStatusAsync(
         entry.property.id,
         "funded",
@@ -473,7 +474,8 @@ export default function DashboardPage() {
         mint,
         entry.campaignPda
       );
-      setActionSuccess(`Tokens claimed. Tx: ${sig.slice(0, 12)}…`);
+      setActionSuccess("Tokens claimed on-chain.");
+      setLastActionTxSignature(sig);
       await loadPortfolio();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to claim tokens";

@@ -5,12 +5,12 @@ import { motion } from "framer-motion";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { getAssociatedTokenAddress, getAccount } from "@solana/spl-token";
-import { ArrowLeft, Coins, Tag, Loader2, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Coins, Tag, Loader2, CheckCircle2, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getRegisteredPropertiesAsync, RegisteredProperty } from "@/lib/propertyStore";
 import { createListing, solToLamports, fetchListing } from "@/lib/marketplaceClient";
-import { connection } from "@/lib/solana";
+import { connection, getExplorerUrl } from "@/lib/solana";
 
 interface TokenHolding {
   property: RegisteredProperty;
@@ -28,6 +28,7 @@ export default function SellPage() {
   const [pricePerToken, setPricePerToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [listingTxSignature, setListingTxSignature] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -109,7 +110,7 @@ export default function SellPage() {
         priceInLamports
       );
 
-      console.log("Listing created:", signature);
+      setListingTxSignature(signature);
       setSuccess(true);
     } catch (err: any) {
       console.error("Listing error:", err);
@@ -134,6 +135,17 @@ export default function SellPage() {
           <p className="text-gray-400 mb-6">
             Your {sellAmount} tokens are now listed for sale at {pricePerToken} SOL each
           </p>
+          {listingTxSignature && (
+            <a
+              href={getExplorerUrl(listingTxSignature)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center gap-2 text-emerald-400 hover:text-emerald-300 text-sm mb-6 w-full"
+            >
+              View listing transaction on Explorer
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          )}
           <div className="flex gap-4">
             <Link
               href="/marketplace"
@@ -144,6 +156,7 @@ export default function SellPage() {
             <button
               onClick={() => {
                 setSuccess(false);
+                setListingTxSignature(null);
                 setSelectedProperty(null);
                 setSellAmount(1);
                 setPricePerToken("");

@@ -29,6 +29,7 @@ import {
   RegistrationRequest,
   RegistrationRequestStatus,
 } from "@/lib/registrationRequests";
+import { getExplorerUrl } from "@/lib/solana";
 import { Trash2 } from "lucide-react";
 
 type FilterTab = "pending" | "approved" | "rejected" | "tokenized" | "all";
@@ -83,6 +84,7 @@ export default function AdminRegistrationsPage() {
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [infoTxSignature, setInfoTxSignature] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectionNotes, setRejectionNotes] = useState("");
 
@@ -158,6 +160,7 @@ export default function AdminRegistrationsPage() {
     setProcessingId(id);
     setError(null);
     setInfo(null);
+    setInfoTxSignature(null);
 
     const res = await reviewRegistrationRequest(id, {
       action: "approve",
@@ -180,6 +183,7 @@ export default function AdminRegistrationsPage() {
         );
       } else {
         setInfo(wlRes.message);
+        setInfoTxSignature(wlRes.signature ?? null);
       }
     }
 
@@ -191,11 +195,13 @@ export default function AdminRegistrationsPage() {
     setProcessingId(req.id);
     setError(null);
     setInfo(null);
+    setInfoTxSignature(null);
     const wlRes = await whitelistRequesterOnChain(req.requester_address);
     if (!wlRes.ok) {
       setError(`On-chain whitelist failed: ${wlRes.message}`);
     } else {
       setInfo(wlRes.message);
+      setInfoTxSignature(wlRes.signature ?? null);
     }
     setProcessingId(null);
   };
@@ -360,9 +366,28 @@ export default function AdminRegistrationsPage() {
         )}
 
         {info && (
-          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 mb-6 flex justify-between gap-3">
-            <span className="text-emerald-300">{info}</span>
-            <button onClick={() => setInfo(null)} className="text-emerald-400">
+          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex-1 min-w-0">
+              <span className="text-emerald-300">{info}</span>
+              {infoTxSignature && (
+                <a
+                  href={getExplorerUrl(infoTxSignature)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center gap-2 text-emerald-400 hover:text-emerald-200 text-sm font-medium"
+                >
+                  View on-chain transaction
+                  <ExternalLink className="w-4 h-4 shrink-0" />
+                </a>
+              )}
+            </div>
+            <button
+              onClick={() => {
+                setInfo(null);
+                setInfoTxSignature(null);
+              }}
+              className="text-emerald-400 shrink-0"
+            >
               ✕
             </button>
           </div>

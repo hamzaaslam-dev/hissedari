@@ -1,4 +1,5 @@
 import { Property } from "@/data/properties";
+import { SOLANA_NETWORK } from "./solana";
 
 export type CampaignStatus = "active" | "funded" | "cancelled";
 
@@ -331,7 +332,10 @@ export function createPropertyFromRegistration(
         name: `Certificate ${i + 1}`,
         url: cert,
       })),
-      { name: "Token Details", url: `https://explorer.solana.com/address/${blockchainData.mintAddress}?cluster=devnet` },
+      {
+        name: "Token Details",
+        url: `https://explorer.solana.com/address/${blockchainData.mintAddress}?cluster=${SOLANA_NETWORK}`,
+      },
     ],
     timeline: [
       { date: new Date().toISOString().split("T")[0], event: "Property Tokenized" },

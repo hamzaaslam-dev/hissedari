@@ -38,6 +38,7 @@ import {
   createCampaign,
   getCampaignPDA,
   percentToBps,
+  hasAnyInvestorClaimedTokens,
 } from "./crowdfundingClient";
 
 // Use devnet by default, can override with env variable
@@ -60,6 +61,7 @@ export {
   getDividendPoolPDA,
   setDistributionTotalClaimed,
   sumClaimedLamportsForDistribution,
+  hasAnyInvestorClaimedTokens,
 };
 
 export interface TokenizedProperty {
